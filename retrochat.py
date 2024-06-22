@@ -23,7 +23,7 @@ API_KEY_NAME = "ANTHROPIC_API_KEY"
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
 
-def print_slow(text, delay=0.0050, color=Fore.WHITE):
+def print_slow(text, delay=0.0010, color=Fore.WHITE):
     if text:
         for char in text:
             sys.stdout.write(color + char)
@@ -170,6 +170,7 @@ provider_registry.register_provider('Ollama', OllamaChatSession)
 provider_registry.register_provider('Anthropic', AnthropicChatSession)
 
 # Main application class
+# Main application class
 class ChatApp:
     def __init__(self):
         self.model_url_ollama = "http://192.168.1.82:11434/api/chat"
@@ -233,45 +234,57 @@ class ChatApp:
         return True
 
     def start(self):
-        clear_screen()
-        print_slow("Welcome to the Chat Program!", color=Fore.GREEN)
-        print_slow("Select the mode:\n1. Ollama\n2. Anthropic", color=Fore.CYAN)
-        
-        mode = input(Fore.GREEN + "Enter 1 or 2: ").strip()
+        try:
+            clear_screen()
+            print_slow("Welcome to the Chat Program!", color=Fore.GREEN)
+            print_slow("Select the mode:\n1. Ollama\n2. Anthropic", color=Fore.CYAN)
+            
+            mode = input(Fore.GREEN + "Enter 1 or 2: ").strip()
 
-        if mode == '1':
-            model = self.select_ollama_model()
-            if not model:
+            if mode == '1':
+                model = self.select_ollama_model()
+                if not model:
+                    return
+                session = provider_registry.get_provider('Ollama', self.model_url_ollama, model, self.history_manager)
+
+            elif mode == '2':
+                if not self.ensure_anthropic_api_key():
+                    return
+                session = provider_registry.get_provider('Anthropic', os.getenv(API_KEY_NAME), self.model_url_anthropic, self.history_manager)
+
+            else:
+                print_slow("Invalid selection. Please restart the program and choose a valid mode.", color=Fore.RED)
                 return
-            session = provider_registry.get_provider('Ollama', self.model_url_ollama, model, self.history_manager)
 
-        elif mode == '2':
-            if not self.ensure_anthropic_api_key():
-                return
-            session = provider_registry.get_provider('Anthropic', os.getenv(API_KEY_NAME), self.model_url_anthropic, self.history_manager)
+            session.display_history()  # Display the loaded chat history
 
-        else:
-            print_slow("Invalid selection. Please restart the program and choose a valid mode.", color=Fore.RED)
-            return
+            while True:
+                try:
+                    user_input = input(Fore.GREEN).strip()
+                    if user_input.lower() == '/exit':
+                        print_slow("Thank you for chatting. Goodbye!", color=Fore.CYAN)
+                        session.save_history()  # Save history before exiting
+                        break
+                    elif user_input.lower() == '/chat reset':
+                        self.history_manager.clear_history()
+                        session.chat_history = []
+                        print_slow("Chat history has been reset.", color=Fore.CYAN)
+                        continue
 
-        session.display_history()  # Display the loaded chat history
+                    response = session.send_message(user_input)
+                    if response:  # Ensure response is not None before printing
+                        print_slow(response, color=Fore.YELLOW)
+                except KeyboardInterrupt:
+                    print_slow("\nInterrupted by user. Exiting...", color=Fore.CYAN)
+                    session.save_history()  # Save history before exiting
+                    break
 
-        while True:
-            user_input = input(Fore.GREEN).strip()
-            if user_input.lower() == '/exit':
-                print_slow("Thank you for chatting. Goodbye!", color=Fore.CYAN)
-                session.save_history()  # Save history before exiting
-                break
-            elif user_input.lower() == '/chat reset':
-                self.history_manager.clear_history()
-                session.chat_history = []
-                print_slow("Chat history has been reset.", color=Fore.CYAN)
-                continue
-
-            response = session.send_message(user_input)
-            if response:  # Ensure response is not None before printing
-                print_slow(response, color=Fore.YELLOW)
+        except KeyboardInterrupt:
+            print_slow("\nProgram interrupted by user. Exiting...", color=Fore.CYAN)
+        except Exception as e:
+            print_slow(f"\nAn unexpected error occurred: {e}", color=Fore.RED)
 
 if __name__ == "__main__":
     app = ChatApp()
     app.start()
+

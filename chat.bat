@@ -1,2 +1,2 @@
 @echo off
-python "%~dp0chat.py" %*
+python "%~dp0retrochat.py" %*
