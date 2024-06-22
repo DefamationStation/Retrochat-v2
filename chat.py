@@ -63,7 +63,6 @@ def main():
         
         response = chat_with_claude(user_input)
         print_slow(response, color=Fore.YELLOW)
-        print()  # Add a newline only after Claude's response
 
 if __name__ == "__main__":
     main()
