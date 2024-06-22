@@ -4,24 +4,21 @@ import time
 import json
 import requests
 from colorama import init, Fore, Style
-from dotenv import load_dotenv
+from dotenv import load_dotenv, set_key
 from abc import ABC, abstractmethod
 
 # Initialize colorama for cross-platform colored terminal output
 init(autoreset=True)
 
-# Load environment variables from .env file
-load_dotenv()
-
-# Get API key from environment variable
-API_KEY = os.getenv("ANTHROPIC_API_KEY")
-
+# Constants
+ENV_FILE = '.env'
+API_KEY_NAME = "ANTHROPIC_API_KEY"
 CHAT_HISTORY_FILE = "chat_history.json"
 
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
 
-def print_slow(text, delay=0.010, color=Fore.WHITE):
+def print_slow(text, delay=0.01, color=Fore.WHITE):
     if text:
         for char in text:
             sys.stdout.write(color + char)
@@ -77,6 +74,7 @@ class ChatSession(ABC):
             for entry in self.chat_history:
                 role_color = Fore.GREEN if entry['role'] == 'user' else Fore.YELLOW
                 print_slow(f"{entry['content']}", color=role_color)
+                print()  # New line after each message
 
 # Ollama chat session implementation with streaming
 class OllamaChatSession(ChatSession):
@@ -192,6 +190,26 @@ class ChatApp:
             print_slow("Invalid input. Please enter a number.", color=Fore.RED)
             return self.select_ollama_model()
 
+    def ensure_anthropic_api_key(self):
+        if not os.path.exists(ENV_FILE):
+            print_slow(f"{ENV_FILE} not found. Creating a new one...", color=Fore.CYAN)
+            open(ENV_FILE, 'a').close()
+
+        load_dotenv(ENV_FILE)
+        api_key = os.getenv(API_KEY_NAME)
+
+        if not api_key:
+            print_slow(f"{API_KEY_NAME} is not set. Please enter your Anthropic API key.", color=Fore.CYAN)
+            api_key = input(Fore.GREEN + "Enter your Anthropic API key: ").strip()
+            if api_key:
+                set_key(ENV_FILE, API_KEY_NAME, api_key)
+                load_dotenv(ENV_FILE)  # Reload .env to update environment with new key
+                print_slow(f"{API_KEY_NAME} has been set and saved in {ENV_FILE}.", color=Fore.CYAN)
+            else:
+                print_slow("No API key provided. Anthropic mode cannot be used.", color=Fore.RED)
+                return False
+        return True
+
     def start(self):
         clear_screen()
         print_slow("Welcome to the Chat Program!", color=Fore.GREEN)
@@ -206,11 +224,9 @@ class ChatApp:
             session = OllamaChatSession(self.model_url_ollama, model, self.history_manager)
 
         elif mode == '2':
-            if not API_KEY:
-                print_slow("Error: ANTHROPIC_API_KEY not found in environment variables.", color=Fore.RED)
-                print_slow("Please set your API key as an environment variable named ANTHROPIC_API_KEY.", color=Fore.YELLOW)
+            if not self.ensure_anthropic_api_key():
                 return
-            session = AnthropicChatSession(API_KEY, self.model_url_anthropic, self.history_manager)
+            session = AnthropicChatSession(os.getenv(API_KEY_NAME), self.model_url_anthropic, self.history_manager)
 
         else:
             print_slow("Invalid selection. Please restart the program and choose a valid mode.", color=Fore.RED)
