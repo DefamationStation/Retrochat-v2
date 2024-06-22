@@ -10,10 +10,15 @@ from abc import ABC, abstractmethod
 # Initialize colorama for cross-platform colored terminal output
 init(autoreset=True)
 
-# Constants
-ENV_FILE = '.env'
+# Constants for user-specific storage
+USER_HOME = os.path.expanduser('~')
+RETROCHAT_DIR = os.path.join(USER_HOME, '.retrochat')
+if not os.path.exists(RETROCHAT_DIR):
+    os.makedirs(RETROCHAT_DIR)
+
+ENV_FILE = os.path.join(RETROCHAT_DIR, '.env')
+CHAT_HISTORY_FILE = os.path.join(RETROCHAT_DIR, 'chat_history.json')
 API_KEY_NAME = "ANTHROPIC_API_KEY"
-CHAT_HISTORY_FILE = "chat_history.json"
 
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
@@ -74,7 +79,6 @@ class ChatSession(ABC):
             for entry in self.chat_history:
                 role_color = Fore.GREEN if entry['role'] == 'user' else Fore.YELLOW
                 print_slow(f"{entry['content']}", color=role_color)
-                print()  # New line after each message
 
 # Ollama chat session implementation with streaming
 class OllamaChatSession(ChatSession):
