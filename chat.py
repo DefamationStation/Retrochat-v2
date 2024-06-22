@@ -23,7 +23,7 @@ API_KEY_NAME = "ANTHROPIC_API_KEY"
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
 
-def print_slow(text, delay=0.01, color=Fore.WHITE):
+def print_slow(text, delay=0.0050, color=Fore.WHITE):
     if text:
         for char in text:
             sys.stdout.write(color + char)
@@ -55,11 +55,11 @@ class ChatHistoryManager:
         if os.path.exists(self.file_path):
             os.remove(self.file_path)
 
-# Abstract base class for chat sessions
-class ChatSession(ABC):
+# Abstract base class for chat providers
+class ChatProvider(ABC):
     def __init__(self, history_manager):
-        self.chat_history = history_manager.load_history()
         self.history_manager = history_manager
+        self.chat_history = history_manager.load_history()
 
     @abstractmethod
     def send_message(self, message):
@@ -81,7 +81,7 @@ class ChatSession(ABC):
                 print_slow(f"{entry['content']}", color=role_color)
 
 # Ollama chat session implementation with streaming
-class OllamaChatSession(ChatSession):
+class OllamaChatSession(ChatProvider):
     def __init__(self, model_url, model, history_manager):
         super().__init__(history_manager)
         self.model_url = model_url
@@ -115,7 +115,7 @@ class OllamaChatSession(ChatSession):
             print_slow(f"Error: {response.status_code} - {response.text}", color=Fore.RED)
 
 # Anthropic chat session implementation
-class AnthropicChatSession(ChatSession):
+class AnthropicChatSession(ChatProvider):
     def __init__(self, api_key, model_url, history_manager):
         super().__init__(history_manager)
         self.api_key = api_key
@@ -150,6 +150,24 @@ class AnthropicChatSession(ChatSession):
                 return f"Error processing response: {str(e)}"
         else:
             return f"Error: {response.status_code} - {response.text}"
+
+# Provider Registry for dynamic provider management
+class ProviderRegistry:
+    def __init__(self):
+        self.providers = {}
+
+    def register_provider(self, name, provider_class):
+        self.providers[name] = provider_class
+
+    def get_provider(self, name, *args, **kwargs):
+        provider_class = self.providers.get(name)
+        if not provider_class:
+            raise ValueError(f"Provider '{name}' not registered.")
+        return provider_class(*args, **kwargs)
+
+provider_registry = ProviderRegistry()
+provider_registry.register_provider('Ollama', OllamaChatSession)
+provider_registry.register_provider('Anthropic', AnthropicChatSession)
 
 # Main application class
 class ChatApp:
@@ -225,12 +243,12 @@ class ChatApp:
             model = self.select_ollama_model()
             if not model:
                 return
-            session = OllamaChatSession(self.model_url_ollama, model, self.history_manager)
+            session = provider_registry.get_provider('Ollama', self.model_url_ollama, model, self.history_manager)
 
         elif mode == '2':
             if not self.ensure_anthropic_api_key():
                 return
-            session = AnthropicChatSession(os.getenv(API_KEY_NAME), self.model_url_anthropic, self.history_manager)
+            session = provider_registry.get_provider('Anthropic', os.getenv(API_KEY_NAME), self.model_url_anthropic, self.history_manager)
 
         else:
             print_slow("Invalid selection. Please restart the program and choose a valid mode.", color=Fore.RED)
