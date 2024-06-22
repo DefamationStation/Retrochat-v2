@@ -16,20 +16,48 @@ load_dotenv()
 # Get API key from environment variable
 API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
+CHAT_HISTORY_FILE = "chat_history.json"
+
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
 
-def print_slow(text, delay=0.01, color=Fore.WHITE):
-    for char in text:
-        sys.stdout.write(color + char)
-        sys.stdout.flush()
-        time.sleep(delay)
-    print()
+def print_slow(text, delay=0.010, color=Fore.WHITE):
+    if text:
+        for char in text:
+            sys.stdout.write(color + char)
+            sys.stdout.flush()
+            time.sleep(delay)
+        print()
+
+# Print directly to the UI without delay
+def print_streaming(text, color=Fore.WHITE):
+    sys.stdout.write(color + text)
+    sys.stdout.flush()
+
+# Chat History Manager
+class ChatHistoryManager:
+    def __init__(self, file_path):
+        self.file_path = file_path
+
+    def save_history(self, history):
+        with open(self.file_path, 'w') as f:
+            json.dump(history, f, indent=4)
+
+    def load_history(self):
+        if os.path.exists(self.file_path):
+            with open(self.file_path, 'r') as f:
+                return json.load(f)
+        return []
+
+    def clear_history(self):
+        if os.path.exists(self.file_path):
+            os.remove(self.file_path)
 
 # Abstract base class for chat sessions
 class ChatSession(ABC):
-    def __init__(self):
-        self.chat_history = []
+    def __init__(self, history_manager):
+        self.chat_history = history_manager.load_history()
+        self.history_manager = history_manager
 
     @abstractmethod
     def send_message(self, message):
@@ -38,10 +66,22 @@ class ChatSession(ABC):
     def add_to_history(self, role, content):
         self.chat_history.append({"role": role, "content": content})
 
-# Ollama chat session implementation
+    def save_history(self):
+        self.history_manager.save_history(self.chat_history)
+
+    def display_history(self):
+        if not self.chat_history:
+            print_slow("No previous chat history.", color=Fore.CYAN)
+        else:
+            print_slow("Chat history loaded from previous session:", color=Fore.CYAN)
+            for entry in self.chat_history:
+                role_color = Fore.GREEN if entry['role'] == 'user' else Fore.YELLOW
+                print_slow(f"{entry['content']}", color=role_color)
+
+# Ollama chat session implementation with streaming
 class OllamaChatSession(ChatSession):
-    def __init__(self, model_url, model):
-        super().__init__()
+    def __init__(self, model_url, model, history_manager):
+        super().__init__(history_manager)
         self.model_url = model_url
         self.model = model
 
@@ -49,7 +89,8 @@ class OllamaChatSession(ChatSession):
         self.add_to_history("user", message)
         data = {
             "model": self.model,
-            "messages": self.chat_history
+            "messages": self.chat_history,
+            "stream": True  # Enable streaming
         }
         response = requests.post(self.model_url, json=data, stream=True)
         if response.status_code == 200:
@@ -60,19 +101,21 @@ class OllamaChatSession(ChatSession):
                         response_json = json.loads(line)
                         message_content = response_json.get('message', {}).get('content', '')
                         complete_message += message_content
+                        print_streaming(message_content, color=Fore.YELLOW)  # Print each chunk as it comes in
                         if response_json.get('done', False):
                             break
                 self.add_to_history("assistant", complete_message)
-                return complete_message
+                self.save_history()
+                print()  # Print new line after the complete message
             except Exception as e:
-                return f"Error processing response: {str(e)}"
+                print_slow(f"Error processing response: {str(e)}", color=Fore.RED)
         else:
-            return f"Error: {response.status_code} - {response.text}"
+            print_slow(f"Error: {response.status_code} - {response.text}", color=Fore.RED)
 
 # Anthropic chat session implementation
 class AnthropicChatSession(ChatSession):
-    def __init__(self, api_key, model_url):
-        super().__init__()
+    def __init__(self, api_key, model_url, history_manager):
+        super().__init__(history_manager)
         self.api_key = api_key
         self.model_url = model_url
 
@@ -92,9 +135,17 @@ class AnthropicChatSession(ChatSession):
         }
         response = requests.post(self.model_url, json=data, headers=headers)
         if response.status_code == 200:
-            assistant_message = response.json()['content'][0]['text']
-            self.add_to_history("assistant", assistant_message)
-            return assistant_message
+            try:
+                response_json = response.json()
+                assistant_message = response_json.get('content', [{}])[0].get('text', '')
+                if assistant_message:
+                    self.add_to_history("assistant", assistant_message)
+                    self.save_history()
+                    return assistant_message
+                else:
+                    return "No response content received."
+            except Exception as e:
+                return f"Error processing response: {str(e)}"
         else:
             return f"Error: {response.status_code} - {response.text}"
 
@@ -103,6 +154,7 @@ class ChatApp:
     def __init__(self):
         self.model_url_ollama = "http://192.168.1.82:11434/api/chat"
         self.model_url_anthropic = "https://api.anthropic.com/v1/messages"
+        self.history_manager = ChatHistoryManager(CHAT_HISTORY_FILE)
 
     def get_ollama_models(self):
         url = "http://192.168.1.82:11434/api/tags"
@@ -151,27 +203,36 @@ class ChatApp:
             model = self.select_ollama_model()
             if not model:
                 return
-            session = OllamaChatSession(self.model_url_ollama, model)
+            session = OllamaChatSession(self.model_url_ollama, model, self.history_manager)
 
         elif mode == '2':
             if not API_KEY:
                 print_slow("Error: ANTHROPIC_API_KEY not found in environment variables.", color=Fore.RED)
                 print_slow("Please set your API key as an environment variable named ANTHROPIC_API_KEY.", color=Fore.YELLOW)
                 return
-            session = AnthropicChatSession(API_KEY, self.model_url_anthropic)
+            session = AnthropicChatSession(API_KEY, self.model_url_anthropic, self.history_manager)
 
         else:
             print_slow("Invalid selection. Please restart the program and choose a valid mode.", color=Fore.RED)
             return
 
+        session.display_history()  # Display the loaded chat history
+
         while True:
             user_input = input(Fore.GREEN).strip()
             if user_input.lower() == '/exit':
                 print_slow("Thank you for chatting. Goodbye!", color=Fore.CYAN)
+                session.save_history()  # Save history before exiting
                 break
-            
+            elif user_input.lower() == '/chat reset':
+                self.history_manager.clear_history()
+                session.chat_history = []
+                print_slow("Chat history has been reset.", color=Fore.CYAN)
+                continue
+
             response = session.send_message(user_input)
-            print_slow(response, color=Fore.YELLOW)
+            if response:  # Ensure response is not None before printing
+                print_slow(response, color=Fore.YELLOW)
 
 if __name__ == "__main__":
     app = ChatApp()
