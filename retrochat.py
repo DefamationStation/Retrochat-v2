@@ -7,6 +7,7 @@ import sqlite3
 from colorama import init, Fore, Style
 from dotenv import load_dotenv, set_key
 from abc import ABC, abstractmethod
+from typing import List, Dict
 
 # Initialize colorama for cross-platform colored terminal output
 init(autoreset=True)
@@ -14,32 +15,30 @@ init(autoreset=True)
 # Constants for user-specific storage
 USER_HOME = os.path.expanduser('~')
 RETROCHAT_DIR = os.path.join(USER_HOME, '.retrochat')
-if not os.path.exists(RETROCHAT_DIR):
-    os.makedirs(RETROCHAT_DIR)
+os.makedirs(RETROCHAT_DIR, exist_ok=True)
 
 ENV_FILE = os.path.join(RETROCHAT_DIR, '.env')
 DB_FILE = os.path.join(RETROCHAT_DIR, 'chat_history.db')
 API_KEY_NAME = "ANTHROPIC_API_KEY"
 
+# Utility functions
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
 
 def print_slow(text, delay=0.001, color=Fore.WHITE):
-    if text:
-        for char in text:
-            sys.stdout.write(color + char)
-            sys.stdout.flush()
-            time.sleep(delay)
-        print()
+    for char in text:
+        sys.stdout.write(color + char)
+        sys.stdout.flush()
+        time.sleep(delay)
+    print()
 
-# Print directly to the UI without delay
 def print_streaming(text, color=Fore.WHITE):
     sys.stdout.write(color + text)
     sys.stdout.flush()
 
 # Chat History Manager using SQLite
 class ChatHistoryManager:
-    def __init__(self, db_file, chat_name='default'):
+    def __init__(self, db_file: str, chat_name: str = 'default'):
         self.db_file = db_file
         self.chat_name = chat_name
         self.conn = sqlite3.connect(self.db_file)
@@ -50,7 +49,7 @@ class ChatHistoryManager:
             self.conn.execute('''
                 CREATE TABLE IF NOT EXISTS chat_sessions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    chat_name TEXT NOT NULL,
+                    chat_name TEXT NOT NULL UNIQUE,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
@@ -65,7 +64,7 @@ class ChatHistoryManager:
                 )
             ''')
 
-    def _get_session_id(self, chat_name):
+    def _get_session_id(self, chat_name: str):
         cursor = self.conn.cursor()
         cursor.execute('SELECT id FROM chat_sessions WHERE chat_name = ?', (chat_name,))
         session = cursor.fetchone()
@@ -75,10 +74,10 @@ class ChatHistoryManager:
             cursor.execute('INSERT INTO chat_sessions (chat_name) VALUES (?)', (chat_name,))
             return cursor.lastrowid
 
-    def set_chat_name(self, chat_name):
+    def set_chat_name(self, chat_name: str):
         self.chat_name = chat_name
 
-    def save_history(self, history):
+    def save_history(self, history: List[Dict[str, str]]):
         session_id = self._get_session_id(self.chat_name)
         with self.conn:
             self.conn.execute('DELETE FROM chat_messages WHERE session_id = ?', (session_id,))
@@ -87,7 +86,7 @@ class ChatHistoryManager:
                     INSERT INTO chat_messages (session_id, role, content) VALUES (?, ?, ?)
                 ''', (session_id, message['role'], message['content']))
 
-    def load_history(self):
+    def load_history(self) -> List[Dict[str, str]]:
         session_id = self._get_session_id(self.chat_name)
         cursor = self.conn.cursor()
         cursor.execute('SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY timestamp', (session_id,))
@@ -99,11 +98,14 @@ class ChatHistoryManager:
         with self.conn:
             self.conn.execute('DELETE FROM chat_messages WHERE session_id = ?', (session_id,))
 
-    def rename_history(self, new_name):
+    def rename_history(self, new_name: str):
         session_id = self._get_session_id(self.chat_name)
-        with self.conn:
-            self.conn.execute('UPDATE chat_sessions SET chat_name = ? WHERE id = ?', (new_name, session_id))
-        self.set_chat_name(new_name)
+        try:
+            with self.conn:
+                self.conn.execute('UPDATE chat_sessions SET chat_name = ? WHERE id = ?', (new_name, session_id))
+            self.set_chat_name(new_name)
+        except sqlite3.IntegrityError:
+            print_slow(f"Error: A chat with the name '{new_name}' already exists.", color=Fore.RED)
 
     def delete_history(self):
         session_id = self._get_session_id(self.chat_name)
@@ -112,17 +114,22 @@ class ChatHistoryManager:
             self.conn.execute('DELETE FROM chat_sessions WHERE id = ?', (session_id,))
         self.set_chat_name('default')
 
+    def list_chats(self) -> List[str]:
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT chat_name FROM chat_sessions')
+        return [row[0] for row in cursor.fetchall()]
+
 # Abstract base class for chat providers
 class ChatProvider(ABC):
-    def __init__(self, history_manager):
+    def __init__(self, history_manager: ChatHistoryManager):
         self.history_manager = history_manager
         self.chat_history = history_manager.load_history()
 
     @abstractmethod
-    def send_message(self, message):
+    def send_message(self, message: str):
         pass
 
-    def add_to_history(self, role, content):
+    def add_to_history(self, role: str, content: str):
         self.chat_history.append({"role": role, "content": content})
 
     def save_history(self):
@@ -139,12 +146,12 @@ class ChatProvider(ABC):
 
 # Ollama chat session implementation with streaming
 class OllamaChatSession(ChatProvider):
-    def __init__(self, model_url, model, history_manager):
+    def __init__(self, model_url: str, model: str, history_manager: ChatHistoryManager):
         super().__init__(history_manager)
         self.model_url = model_url
         self.model = model
 
-    def send_message(self, message):
+    def send_message(self, message: str):
         self.add_to_history("user", message)
         data = {
             "model": self.model,
@@ -160,7 +167,7 @@ class OllamaChatSession(ChatProvider):
                         response_json = json.loads(line)
                         message_content = response_json.get('message', {}).get('content', '')
                         complete_message += message_content
-                        print_streaming(message_content, color=Fore.YELLOW)  # Print each chunk as it comes in
+                        print_streaming(message_content, color=Fore.YELLOW)
                         if response_json.get('done', False):
                             break
                 self.add_to_history("assistant", complete_message)
@@ -173,15 +180,15 @@ class OllamaChatSession(ChatProvider):
 
 # Anthropic chat session implementation
 class AnthropicChatSession(ChatProvider):
-    def __init__(self, api_key, model_url, history_manager):
+    def __init__(self, api_key: str, model_url: str, history_manager: ChatHistoryManager):
         super().__init__(history_manager)
         self.api_key = api_key
         self.model_url = model_url
 
-    def send_message(self, message):
+    def send_message(self, message: str):
         self.add_to_history("user", message)
         data = {
-            "model": "claude-3-5-sonnet-20240620",  # Use the appropriate model
+            "model": "claude-3-5-sonnet-20240620",
             "max_tokens": 4096,
             "temperature": 0.0,
             "system": "Keep your answers short and to the point.",
@@ -213,10 +220,10 @@ class ProviderRegistry:
     def __init__(self):
         self.providers = {}
 
-    def register_provider(self, name, provider_class):
+    def register_provider(self, name: str, provider_class: type):
         self.providers[name] = provider_class
 
-    def get_provider(self, name, *args, **kwargs):
+    def get_provider(self, name: str, *args, **kwargs) -> ChatProvider:
         provider_class = self.providers.get(name)
         if not provider_class:
             raise ValueError(f"Provider '{name}' not registered.")
@@ -226,78 +233,20 @@ provider_registry = ProviderRegistry()
 provider_registry.register_provider('Ollama', OllamaChatSession)
 provider_registry.register_provider('Anthropic', AnthropicChatSession)
 
-# Main application class
-class ChatApp:
-    def __init__(self):
-        self.model_url_ollama = "http://192.168.1.82:11434/api/chat"
-        self.model_url_anthropic = "https://api.anthropic.com/v1/messages"
-        self.chat_name = 'default'
-        self.history_manager = ChatHistoryManager(DB_FILE, self.chat_name)
+# Command handler for the application
+class CommandHandler:
+    def __init__(self, history_manager: ChatHistoryManager):
+        self.history_manager = history_manager
 
-    def get_ollama_models(self):
-        url = "http://192.168.1.82:11434/api/tags"
-        response = requests.get(url)
-        if response.status_code == 200:
-            models_info = response.json()
-            if isinstance(models_info, dict) and 'models' in models_info:
-                model_names = [model['name'] for model in models_info['models']]
-                return model_names
-            else:
-                print_slow("Unexpected API response structure. Expected a dictionary with 'models'.", color=Fore.RED)
-                return []
-        else:
-            print_slow(f"Error fetching Ollama models: {response.status_code} - {response.text}", color=Fore.RED)
-            return []
-
-    def select_ollama_model(self):
-        models = self.get_ollama_models()
-        if not models:
-            print_slow("No Ollama models available.", color=Fore.RED)
-            return None
-
-        print_slow("Available Ollama models:", color=Fore.GREEN)
-        for idx, model in enumerate(models):
-            print_slow(f"{idx + 1}. {model}", color=Fore.CYAN)
-
-        try:
-            choice = int(input(Fore.GREEN + "Select a model number: ")) - 1
-            if 0 <= choice < len(models):
-                return models[choice]
-            else:
-                print_slow("Invalid choice. Please try again.", color=Fore.RED)
-                return self.select_ollama_model()
-        except ValueError:
-            print_slow("Invalid input. Please enter a number.", color=Fore.RED)
-            return self.select_ollama_model()
-
-    def ensure_anthropic_api_key(self):
-        if not os.path.exists(ENV_FILE):
-            print_slow(f"{ENV_FILE} not found. Creating a new one...", color=Fore.CYAN)
-            open(ENV_FILE, 'a').close()
-
-        load_dotenv(ENV_FILE)
-        api_key = os.getenv(API_KEY_NAME)
-
-        if not api_key:
-            print_slow(f"{API_KEY_NAME} is not set. Please enter your Anthropic API key.", color=Fore.CYAN)
-            api_key = input(Fore.GREEN + "Enter your Anthropic API key: ").strip()
-            if api_key:
-                set_key(ENV_FILE, API_KEY_NAME, api_key)
-                load_dotenv(ENV_FILE)  # Reload .env to update environment with new key
-                print_slow(f"{API_KEY_NAME} has been set and saved in {ENV_FILE}.", color=Fore.CYAN)
-            else:
-                print_slow("No API key provided. Anthropic mode cannot be used.", color=Fore.RED)
-                return False
-        return True
-
-    def handle_command(self, command, session):
-        command_parts = command.split(' ', 2)  # Split into up to 2 parts
-
+    def handle_command(self, command: str, session: ChatProvider):
+        command_parts = command.split(' ', 2)
         if len(command_parts) < 2:
             print_slow("Command requires a value. Usage examples:\n"
                        "/chat rename <new_name>\n"
                        "/chat delete\n"
-                       "/chat new <chat_name>", color=Fore.RED)
+                       "/chat new <chat_name>\n"
+                       "/chat list\n"
+                       "/chat open <chat_name>", color=Fore.RED)
             return
 
         cmd = command_parts[0]
@@ -330,15 +279,104 @@ class ChatApp:
                 session.chat_history = []
                 print_slow("Chat history has been reset.", color=Fore.CYAN)
 
+            elif sub_cmd == 'list':
+                chats = self.history_manager.list_chats()
+                if chats:
+                    print_slow("Available chats:", color=Fore.CYAN)
+                    for chat in chats:
+                        print_slow(chat, color=Fore.GREEN)
+                else:
+                    print_slow("No available chats.", color=Fore.RED)
+
+            elif sub_cmd == 'open':
+                if len(command_parts) == 3:
+                    chat_name = command_parts[2].strip()
+                    if chat_name in self.history_manager.list_chats():
+                        self.history_manager.set_chat_name(chat_name)
+                        session.chat_history = self.history_manager.load_history()
+                        print_slow(f"Chat '{chat_name}' opened.", color=Fore.CYAN)
+                        session.display_history()
+                    else:
+                        print_slow(f"Chat '{chat_name}' does not exist.", color=Fore.RED)
+                else:
+                    print_slow("Please provide the name of the chat to open. Usage: /chat open <chat_name>", color=Fore.RED)
+
             else:
                 print_slow("Unknown command. Available commands are:\n"
                            "/chat rename <new_name>\n"
                            "/chat delete\n"
                            "/chat new <chat_name>\n"
-                           "/chat reset", color=Fore.RED)
+                           "/chat reset\n"
+                           "/chat list\n"
+                           "/chat open <chat_name>", color=Fore.RED)
 
         else:
             print_slow("Unknown command.", color=Fore.RED)
+
+# Main application class
+class ChatApp:
+    def __init__(self):
+        self.model_url_ollama = "http://192.168.1.82:11434/api/chat"
+        self.model_url_anthropic = "https://api.anthropic.com/v1/messages"
+        self.chat_name = 'default'
+        self.history_manager = ChatHistoryManager(DB_FILE, self.chat_name)
+        self.command_handler = CommandHandler(self.history_manager)
+
+    def get_ollama_models(self) -> List[str]:
+        url = "http://192.168.1.82:11434/api/tags"
+        response = requests.get(url)
+        if response.status_code == 200:
+            models_info = response.json()
+            if isinstance(models_info, dict) and 'models' in models_info:
+                model_names = [model['name'] for model in models_info['models']]
+                return model_names
+            else:
+                print_slow("Unexpected API response structure. Expected a dictionary with 'models'.", color=Fore.RED)
+                return []
+        else:
+            print_slow(f"Error fetching Ollama models: {response.status_code} - {response.text}", color=Fore.RED)
+            return []
+
+    def select_ollama_model(self) -> str:
+        models = self.get_ollama_models()
+        if not models:
+            print_slow("No Ollama models available.", color=Fore.RED)
+            return None
+
+        print_slow("Available Ollama models:", color=Fore.GREEN)
+        for idx, model in enumerate(models):
+            print_slow(f"{idx + 1}. {model}", color=Fore.CYAN)
+
+        try:
+            choice = int(input(Fore.GREEN + "Select a model number: ")) - 1
+            if 0 <= choice < len(models):
+                return models[choice]
+            else:
+                print_slow("Invalid choice. Please try again.", color=Fore.RED)
+                return self.select_ollama_model()
+        except ValueError:
+            print_slow("Invalid input. Please enter a number.", color=Fore.RED)
+            return self.select_ollama_model()
+
+    def ensure_anthropic_api_key(self) -> bool:
+        if not os.path.exists(ENV_FILE):
+            print_slow(f"{ENV_FILE} not found. Creating a new one...", color=Fore.CYAN)
+            open(ENV_FILE, 'a').close()
+
+        load_dotenv(ENV_FILE)
+        api_key = os.getenv(API_KEY_NAME)
+
+        if not api_key:
+            print_slow(f"{API_KEY_NAME} is not set. Please enter your Anthropic API key.", color=Fore.CYAN)
+            api_key = input(Fore.GREEN + "Enter your Anthropic API key: ").strip()
+            if api_key:
+                set_key(ENV_FILE, API_KEY_NAME, api_key)
+                load_dotenv(ENV_FILE)  # Reload .env to update environment with new key
+                print_slow(f"{API_KEY_NAME} has been set and saved in {ENV_FILE}.", color=Fore.CYAN)
+            else:
+                print_slow("No API key provided. Anthropic mode cannot be used.", color=Fore.RED)
+                return False
+        return True
 
     def start(self):
         try:
@@ -373,7 +411,7 @@ class ChatApp:
                         session.save_history()
                         break
                     elif user_input.startswith('/'):
-                        self.handle_command(user_input, session)
+                        self.command_handler.handle_command(user_input, session)
                         continue
 
                     response = session.send_message(user_input)
