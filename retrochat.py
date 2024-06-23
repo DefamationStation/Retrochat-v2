@@ -226,8 +226,6 @@ class OpenAIChatSession(ChatProvider):
         self.model = model
 
     def send_message(self, message: str):
-       
-
         self.add_to_history("user", message)
         data = {
             "model": self.model,
@@ -480,33 +478,26 @@ class ChatApp:
                 print_slow("Invalid selection. Please restart the program and choose a valid mode.", color=Fore.RED)
                 return
 
-            session.display_history()  # Display the loaded chat history
+            print_slow(f"Chat session started. Type your messages or use commands (e.g., /chat list).", color=Fore.CYAN)
+            session.display_history()
 
             while True:
-                try:
-                    user_input = input(Fore.GREEN).strip()
-                    if user_input.lower() == '/exit':
-                        print_slow("Thank you for chatting. Goodbye!", color=Fore.CYAN)
-                        session.save_history()
-                        break
-                    elif user_input.startswith('/'):
-                        self.command_handler.handle_command(user_input, session)
-                        continue
-
-                    response = session.send_message(user_input)
-                    if response:  # Ensure response is not None before printing
-                        print_slow(response, color=Fore.YELLOW)
-                except KeyboardInterrupt:
-                    print_slow("\nInterrupted by user. Exiting...", color=Fore.CYAN)
-                    session.save_history()  # Save history before exiting
+                user_input = input(Fore.GREEN + "> ").strip()
+                if user_input.lower() == '/exit':
+                    print_slow("Thank you for chatting. Goodbye!", color=Fore.CYAN)
                     break
+                elif user_input.startswith('/'):
+                    self.command_handler.handle_command(user_input, session)
+                else:
+                    response = session.send_message(user_input)
+                    if response:
+                        print_slow(response, color=Fore.YELLOW)
 
         except KeyboardInterrupt:
             print_slow("\nProgram interrupted by user. Exiting...", color=Fore.CYAN)
         except Exception as e:
             print_slow(f"\nAn unexpected error occurred: {e}", color=Fore.RED)
 
-# Main function
 if __name__ == "__main__":
     history_manager = ChatHistoryManager(DB_FILE)
     command_handler = CommandHandler(history_manager)

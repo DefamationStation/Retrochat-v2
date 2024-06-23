@@ -23,7 +23,7 @@ def set_amoled_black_title_bar(window):
 class Chatbox(QWidget):
     def __init__(self):
         super().__init__()
-        self.fontsize = 20
+        self.fontsize = 18
         self.is_moving = False
         self.startPos = QPoint(0, 0)
         self.help_message_displayed = False
@@ -135,7 +135,7 @@ class Chatbox(QWidget):
     def process_input(self):
         user_message = self.user_input.text().strip()
         if user_message:
-            self.append_message(f"{user_message}", Qt.green)
+            self.append_message(f"> {user_message}", Qt.green)
             self.user_input.clear()
             self.send_to_backend(user_message)
 
