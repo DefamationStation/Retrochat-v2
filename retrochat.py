@@ -21,6 +21,7 @@ ENV_FILE = os.path.join(RETROCHAT_DIR, '.env')
 DB_FILE = os.path.join(RETROCHAT_DIR, 'chat_history.db')
 ANTHROPIC_API_KEY_NAME = "ANTHROPIC_API_KEY"
 OPENAI_API_KEY_NAME = "OPENAI_API_KEY"
+LAST_CHAT_NAME_KEY = "LAST_CHAT_NAME"
 
 # Utility functions
 def clear_screen():
@@ -225,6 +226,8 @@ class OpenAIChatSession(ChatProvider):
         self.model = model
 
     def send_message(self, message: str):
+       
+
         self.add_to_history("user", message)
         data = {
             "model": self.model,
@@ -272,27 +275,19 @@ class OpenAIChatSession(ChatProvider):
         except Exception as e:
             print_slow(f"Error processing response: {str(e)}", color=Fore.RED)
 
-# Provider Registry for dynamic provider management
-class ProviderRegistry:
-    def __init__(self):
-        self.providers = {}
+# Factory pattern for creating chat providers
+class ChatProviderFactory:
+    @staticmethod
+    def create_provider(provider_type: str, *args, **kwargs) -> ChatProvider:
+        if provider_type == 'Ollama':
+            return OllamaChatSession(*args, **kwargs)
+        elif provider_type == 'Anthropic':
+            return AnthropicChatSession(*args, **kwargs)
+        elif provider_type == 'OpenAI':
+            return OpenAIChatSession(*args, **kwargs)
+        else:
+            raise ValueError(f"Unsupported provider type: {provider_type}")
 
-    def register_provider(self, name: str, provider_class: type):
-        self.providers[name] = provider_class
-
-    def get_provider(self, name: str, *args, **kwargs) -> ChatProvider:
-        provider_class = self.providers.get(name)
-        if not provider_class:
-            raise ValueError(f"Provider '{name}' not registered.")
-        return provider_class(*args, **kwargs)
-
-# Initialize the provider registry and register the providers
-provider_registry = ProviderRegistry()
-provider_registry.register_provider('Ollama', OllamaChatSession)
-provider_registry.register_provider('Anthropic', AnthropicChatSession)
-provider_registry.register_provider('OpenAI', OpenAIChatSession)
-
-# Command handler for the application
 class CommandHandler:
     def __init__(self, history_manager: ChatHistoryManager):
         self.history_manager = history_manager
@@ -317,6 +312,7 @@ class CommandHandler:
                     new_name = command_parts[2].strip()
                     self.history_manager.rename_history(new_name)
                     print_slow(f"Chat renamed to '{new_name}'", color=Fore.CYAN)
+                    self.save_last_chat_name(new_name)  # Save the new chat name to .env
                 else:
                     print_slow("Please provide a new name for the chat. Usage: /chat rename <new_name>", color=Fore.RED)
 
@@ -330,6 +326,7 @@ class CommandHandler:
                     self.history_manager.set_chat_name(new_name)
                     self.history_manager.save_history([])  # Start with an empty history
                     print_slow(f"New chat '{new_name}' created.", color=Fore.CYAN)
+                    self.save_last_chat_name(new_name)  # Save the new chat name to .env
                 else:
                     print_slow("Please provide a name for the new chat. Usage: /chat new <chat_name>", color=Fore.RED)
 
@@ -355,6 +352,7 @@ class CommandHandler:
                         session.chat_history = self.history_manager.load_history()
                         print_slow(f"Chat '{chat_name}' opened.", color=Fore.CYAN)
                         session.display_history()
+                        self.save_last_chat_name(chat_name)  # Save the opened chat name to .env
                     else:
                         print_slow(f"Chat '{chat_name}' does not exist.", color=Fore.RED)
                 else:
@@ -372,26 +370,34 @@ class CommandHandler:
         else:
             print_slow("Unknown command.", color=Fore.RED)
 
-# Main application class
+    def save_last_chat_name(self, chat_name: str):
+        set_key(ENV_FILE, LAST_CHAT_NAME_KEY, chat_name)
+
 class ChatApp:
-    def __init__(self):
+    def __init__(self, history_manager: ChatHistoryManager, command_handler: CommandHandler, provider_factory: ChatProviderFactory):
         self.model_url_ollama = "http://192.168.1.82:11434/api/chat"
         self.model_url_anthropic = "https://api.anthropic.com/v1/messages"
         self.openai_base_url = "https://api.openai.com/v1/chat/completions"
-        self.chat_name = 'default'
-        self.history_manager = ChatHistoryManager(DB_FILE, self.chat_name)
-        self.command_handler = CommandHandler(self.history_manager)
+        self.chat_name = 'default'  # Default value before loading from .env
+        self.history_manager = history_manager
+        self.command_handler = command_handler
+        self.provider_factory = provider_factory
         self.openai_api_key = None
         self.anthropic_api_key = None
 
         # Load environment variables and initialize API keys if present
         self.load_env_variables()
 
+        # Save the initial chat name to .env
+        self.save_last_chat_name(self.chat_name)
+
     def load_env_variables(self):
         if os.path.exists(ENV_FILE):
             load_dotenv(ENV_FILE)
             self.openai_api_key = os.getenv(OPENAI_API_KEY_NAME)
             self.anthropic_api_key = os.getenv(ANTHROPIC_API_KEY_NAME)
+            self.chat_name = os.getenv(LAST_CHAT_NAME_KEY, 'default')  # Load last chat name or default
+            self.history_manager.set_chat_name(self.chat_name)  # Set the chat name in the history manager
 
     def ensure_openai_api_key(self):
         if not self.openai_api_key:
@@ -433,7 +439,10 @@ class ChatApp:
         else:
             print_slow(f"Error fetching Ollama models: {response.status_code} - {response.text}", color=Fore.RED)
             return []
-        
+
+    def save_last_chat_name(self, chat_name: str):
+        set_key(ENV_FILE, LAST_CHAT_NAME_KEY, chat_name)
+
     def start(self):
         try:
             clear_screen()
@@ -455,17 +464,17 @@ class ChatApp:
                 else:
                     print_slow("Invalid choice. Please restart and try again.", color=Fore.RED)
                     return
-                session = provider_registry.get_provider('Ollama', self.model_url_ollama, selected_model, self.history_manager)
+                session = self.provider_factory.create_provider('Ollama', self.model_url_ollama, selected_model, self.history_manager)
 
             elif mode == '2':
                 if not self.ensure_anthropic_api_key():
                     return
-                session = provider_registry.get_provider('Anthropic', self.anthropic_api_key, self.model_url_anthropic, self.history_manager)
+                session = self.provider_factory.create_provider('Anthropic', self.anthropic_api_key, self.model_url_anthropic, self.history_manager)
 
             elif mode == '3':
                 if not self.ensure_openai_api_key():
                     return
-                session = provider_registry.get_provider('OpenAI', self.openai_api_key, self.openai_base_url, "gpt-4o", self.history_manager)
+                session = self.provider_factory.create_provider('OpenAI', self.openai_api_key, self.openai_base_url, "gpt-4", self.history_manager)
 
             else:
                 print_slow("Invalid selection. Please restart the program and choose a valid mode.", color=Fore.RED)
@@ -499,5 +508,9 @@ class ChatApp:
 
 # Main function
 if __name__ == "__main__":
-    app = ChatApp()
+    history_manager = ChatHistoryManager(DB_FILE)
+    command_handler = CommandHandler(history_manager)
+    provider_factory = ChatProviderFactory()
+
+    app = ChatApp(history_manager, command_handler, provider_factory)
     app.start()
