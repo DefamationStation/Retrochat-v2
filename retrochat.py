@@ -3,6 +3,7 @@ import sys
 import time
 import json
 import requests
+import sqlite3
 from colorama import init, Fore, Style
 from dotenv import load_dotenv, set_key
 from abc import ABC, abstractmethod
@@ -17,13 +18,13 @@ if not os.path.exists(RETROCHAT_DIR):
     os.makedirs(RETROCHAT_DIR)
 
 ENV_FILE = os.path.join(RETROCHAT_DIR, '.env')
-CHAT_HISTORY_FILE = os.path.join(RETROCHAT_DIR, 'chat_history.json')
+DB_FILE = os.path.join(RETROCHAT_DIR, 'chat_history.db')
 API_KEY_NAME = "ANTHROPIC_API_KEY"
 
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
 
-def print_slow(text, delay=0.0010, color=Fore.WHITE):
+def print_slow(text, delay=0.001, color=Fore.WHITE):
     if text:
         for char in text:
             sys.stdout.write(color + char)
@@ -36,24 +37,80 @@ def print_streaming(text, color=Fore.WHITE):
     sys.stdout.write(color + text)
     sys.stdout.flush()
 
-# Chat History Manager
+# Chat History Manager using SQLite
 class ChatHistoryManager:
-    def __init__(self, file_path):
-        self.file_path = file_path
+    def __init__(self, db_file, chat_name='default'):
+        self.db_file = db_file
+        self.chat_name = chat_name
+        self.conn = sqlite3.connect(self.db_file)
+        self._create_tables()
+
+    def _create_tables(self):
+        with self.conn:
+            self.conn.execute('''
+                CREATE TABLE IF NOT EXISTS chat_sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_name TEXT NOT NULL,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            self.conn.execute('''
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id INTEGER,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(session_id) REFERENCES chat_sessions(id)
+                )
+            ''')
+
+    def _get_session_id(self, chat_name):
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT id FROM chat_sessions WHERE chat_name = ?', (chat_name,))
+        session = cursor.fetchone()
+        if session:
+            return session[0]
+        else:
+            cursor.execute('INSERT INTO chat_sessions (chat_name) VALUES (?)', (chat_name,))
+            return cursor.lastrowid
+
+    def set_chat_name(self, chat_name):
+        self.chat_name = chat_name
 
     def save_history(self, history):
-        with open(self.file_path, 'w') as f:
-            json.dump(history, f, indent=4)
+        session_id = self._get_session_id(self.chat_name)
+        with self.conn:
+            self.conn.execute('DELETE FROM chat_messages WHERE session_id = ?', (session_id,))
+            for message in history:
+                self.conn.execute('''
+                    INSERT INTO chat_messages (session_id, role, content) VALUES (?, ?, ?)
+                ''', (session_id, message['role'], message['content']))
 
     def load_history(self):
-        if os.path.exists(self.file_path):
-            with open(self.file_path, 'r') as f:
-                return json.load(f)
-        return []
+        session_id = self._get_session_id(self.chat_name)
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY timestamp', (session_id,))
+        messages = cursor.fetchall()
+        return [{'role': role, 'content': content} for role, content in messages]
 
     def clear_history(self):
-        if os.path.exists(self.file_path):
-            os.remove(self.file_path)
+        session_id = self._get_session_id(self.chat_name)
+        with self.conn:
+            self.conn.execute('DELETE FROM chat_messages WHERE session_id = ?', (session_id,))
+
+    def rename_history(self, new_name):
+        session_id = self._get_session_id(self.chat_name)
+        with self.conn:
+            self.conn.execute('UPDATE chat_sessions SET chat_name = ? WHERE id = ?', (new_name, session_id))
+        self.set_chat_name(new_name)
+
+    def delete_history(self):
+        session_id = self._get_session_id(self.chat_name)
+        with self.conn:
+            self.conn.execute('DELETE FROM chat_messages WHERE session_id = ?', (session_id,))
+            self.conn.execute('DELETE FROM chat_sessions WHERE id = ?', (session_id,))
+        self.set_chat_name('default')
 
 # Abstract base class for chat providers
 class ChatProvider(ABC):
@@ -170,12 +227,12 @@ provider_registry.register_provider('Ollama', OllamaChatSession)
 provider_registry.register_provider('Anthropic', AnthropicChatSession)
 
 # Main application class
-# Main application class
 class ChatApp:
     def __init__(self):
         self.model_url_ollama = "http://192.168.1.82:11434/api/chat"
         self.model_url_anthropic = "https://api.anthropic.com/v1/messages"
-        self.history_manager = ChatHistoryManager(CHAT_HISTORY_FILE)
+        self.chat_name = 'default'
+        self.history_manager = ChatHistoryManager(DB_FILE, self.chat_name)
 
     def get_ollama_models(self):
         url = "http://192.168.1.82:11434/api/tags"
@@ -233,6 +290,56 @@ class ChatApp:
                 return False
         return True
 
+    def handle_command(self, command, session):
+        command_parts = command.split(' ', 2)  # Split into up to 2 parts
+
+        if len(command_parts) < 2:
+            print_slow("Command requires a value. Usage examples:\n"
+                       "/chat rename <new_name>\n"
+                       "/chat delete\n"
+                       "/chat new <chat_name>", color=Fore.RED)
+            return
+
+        cmd = command_parts[0]
+        sub_cmd = command_parts[1]
+
+        if cmd == '/chat':
+            if sub_cmd == 'rename':
+                if len(command_parts) == 3:
+                    new_name = command_parts[2].strip()
+                    self.history_manager.rename_history(new_name)
+                    print_slow(f"Chat renamed to '{new_name}'", color=Fore.CYAN)
+                else:
+                    print_slow("Please provide a new name for the chat. Usage: /chat rename <new_name>", color=Fore.RED)
+
+            elif sub_cmd == 'delete':
+                self.history_manager.delete_history()
+                print_slow("Current chat history deleted.", color=Fore.CYAN)
+
+            elif sub_cmd == 'new':
+                if len(command_parts) == 3:
+                    new_name = command_parts[2].strip()
+                    self.history_manager.set_chat_name(new_name)
+                    self.history_manager.save_history([])  # Start with an empty history
+                    print_slow(f"New chat '{new_name}' created.", color=Fore.CYAN)
+                else:
+                    print_slow("Please provide a name for the new chat. Usage: /chat new <chat_name>", color=Fore.RED)
+
+            elif sub_cmd == 'reset':
+                self.history_manager.clear_history()
+                session.chat_history = []
+                print_slow("Chat history has been reset.", color=Fore.CYAN)
+
+            else:
+                print_slow("Unknown command. Available commands are:\n"
+                           "/chat rename <new_name>\n"
+                           "/chat delete\n"
+                           "/chat new <chat_name>\n"
+                           "/chat reset", color=Fore.RED)
+
+        else:
+            print_slow("Unknown command.", color=Fore.RED)
+
     def start(self):
         try:
             clear_screen()
@@ -263,12 +370,10 @@ class ChatApp:
                     user_input = input(Fore.GREEN).strip()
                     if user_input.lower() == '/exit':
                         print_slow("Thank you for chatting. Goodbye!", color=Fore.CYAN)
-                        session.save_history()  # Save history before exiting
+                        session.save_history()
                         break
-                    elif user_input.lower() == '/chat reset':
-                        self.history_manager.clear_history()
-                        session.chat_history = []
-                        print_slow("Chat history has been reset.", color=Fore.CYAN)
+                    elif user_input.startswith('/'):
+                        self.handle_command(user_input, session)
                         continue
 
                     response = session.send_message(user_input)
@@ -287,4 +392,3 @@ class ChatApp:
 if __name__ == "__main__":
     app = ChatApp()
     app.start()
-
