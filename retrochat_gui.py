@@ -2,7 +2,7 @@ import sys
 import subprocess
 import json
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QTextEdit, QLineEdit, QScrollArea, QHBoxLayout, QFrame, QLabel
-from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QPoint
+from PyQt5.QtCore import Qt, QPoint, QThread, pyqtSignal
 from PyQt5.QtGui import QTextCursor, QFont, QIcon, QPixmap
 from ctypes import windll, byref, c_int, sizeof
 
@@ -13,9 +13,9 @@ def set_amoled_black_title_bar(window):
         DWMWA_USE_IMMERSIVE_DARK_MODE = 20
         DWMWA_BORDER_COLOR = 34
         DWMWA_CAPTION_COLOR = 35
-        
+
         windll.dwmapi.DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, byref(c_int(1)), sizeof(c_int))
-        
+
         black_color = 0x000000
         windll.dwmapi.DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, byref(c_int(black_color)), sizeof(c_int))
         windll.dwmapi.DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, byref(c_int(black_color)), sizeof(c_int))
@@ -31,9 +31,11 @@ class Chatbox(QWidget):
         self.resize_direction = None
         self.oldPos = QPoint(0, 0)
         self.is_full_screen = False
+        self.umc = "#00FF00"  # User message color
+        self.amc = "#FFBF00"  # Assistant message color
         self.backend_process = None
-        self.initUI()
 
+        self.initUI()
         self.setWindowIcon(self.create_transparent_icon())
 
     def create_transparent_icon(self):
@@ -44,7 +46,7 @@ class Chatbox(QWidget):
     def initUI(self):
         self.setGeometry(300, 300, 1100, 550)
         self.setWindowFlags(Qt.Window)
-        self.setWindowTitle(" ")
+        self.setWindowTitle("RetroChat")
 
         main_layout = QVBoxLayout()
         chat_layout = QVBoxLayout()
@@ -59,7 +61,7 @@ class Chatbox(QWidget):
         self.chat_scroll_area.setWidgetResizable(True)
         self.chat_scroll_area.setWidget(self.chat_history)
         self.chat_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.chat_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.chat_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # Hide the vertical scrollbar
         self.chat_scroll_area.setFrameShape(QFrame.NoFrame)
         chat_layout.addWidget(self.chat_scroll_area)
 
@@ -82,7 +84,7 @@ class Chatbox(QWidget):
 
     def load_theme(self, theme_name):
         try:
-            with open(f"themes/{theme_name}.json", "r") as theme_file:
+            with open(f"themes/{theme_name}.json", "r", encoding='utf-8') as theme_file:
                 theme = json.load(theme_file)
                 self.set_theme(theme)
         except FileNotFoundError:
@@ -135,32 +137,46 @@ class Chatbox(QWidget):
     def process_input(self):
         user_message = self.user_input.text().strip()
         if user_message:
-            self.append_message(f"> {user_message}", Qt.green)
+            self.append_message(f"You: {user_message}", self.umc)
             self.user_input.clear()
             self.send_to_backend(user_message)
 
     def append_message(self, message, color):
-        self.chat_history.setTextColor(color)
+        self.chat_history.setTextColor(Qt.green)
         self.chat_history.append(message)
-        self.chat_history.setTextColor(Qt.green)  # Reset to default color
+        self.chat_history.moveCursor(QTextCursor.End)
 
     def send_to_backend(self, message):
-        if self.backend_process:
-            self.backend_process.stdin.write(f"{message}\n")
-            self.backend_process.stdin.flush()
-
+        if self.backend_process and self.backend_process.stdin:
+            try:
+                self.backend_process.stdin.write(f"{message}\n")
+                self.backend_process.stdin.flush()
+            except (BrokenPipeError, OSError) as e:
+                print(f"Error writing to backend: {e}")
+                self.restart_backend()
+    
     def start_backend(self):
         self.backend_process = subprocess.Popen(
-            ["python3", "retrochat.py"],
+            [sys.executable, "retrochat.py"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1
+            text=True,  # This ensures the streams are opened in text mode with UTF-8 encoding
+            encoding='utf-8',  # Explicitly specify UTF-8 encoding
+            errors='replace'  # Replace errors with a suitable placeholder
         )
         self.read_output_thread = OutputReader(self.backend_process.stdout, self)
-        self.read_output_thread.new_line.connect(self.append_message)
+        self.read_output_thread.new_line.connect(self.handle_new_line)
         self.read_output_thread.start()
+
+    def restart_backend(self):
+        if self.backend_process:
+            self.backend_process.terminate()
+            self.backend_process.wait()
+        self.start_backend()
+
+    def handle_new_line(self, line, color):
+        self.append_message(line, self.amc)
 
     def closeEvent(self, event):
         if self.backend_process:
@@ -182,7 +198,7 @@ class OutputReader(QThread):
 if __name__ == "__main__":
     app = QApplication([])
     chatbox = Chatbox()
-    set_amoled_black_title_bar(chatbox)  # Apply AMOLED black title bar
+    set_amoled_black_title_bar(chatbox)
     chatbox.start_backend()  # Start the backend process
     chatbox.show()
     sys.exit(app.exec_())
