@@ -2,10 +2,10 @@ import os
 import sys
 import json
 import requests
-import markdown
-from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QTextEdit, QLineEdit, QScrollArea, QHBoxLayout, QFrame, QLabel, QPushButton, QDialog, QFormLayout, QComboBox, QSpinBox, QCheckBox, QFileDialog
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QPoint
-from PyQt5.QtGui import QTextCursor, QFont, QIcon, QPixmap
+import sqlite3
+from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QTextEdit, QLineEdit, QHBoxLayout, QPushButton, QDialog, QFormLayout, QComboBox, QSpinBox, QFileDialog, QInputDialog
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QTextCursor, QFont
 
 class ConfigManager:
     CONFIG_FILENAME = "config.json"
@@ -17,7 +17,7 @@ class ConfigManager:
         "user_color": "#00FF00",
         "assistant_color": "#FFBF00",
         "fontsize": 18,
-        "current_chat_filename": "chat_1.json",
+        "current_chat_name": "chat_1",
         "selected_model": "",
         "current_mode": "ollama",
         "openaiapikey": "",
@@ -47,24 +47,72 @@ class ConfigManager:
             json.dump(config, f, indent=4)
 
 class ChatManager:
-    def __init__(self, filename):
-        self.filename = filename
+    def __init__(self, db_name="chats.db"):
+        self.db_name = db_name
+        self.conn = sqlite3.connect(self.db_name)
+        self.create_tables()
 
-    def save_chat(self, messages, system_prompt):
-        data = {"system_prompt": system_prompt, "messages": messages}
-        with open(self.filename, 'w') as f:
-            json.dump(data, f, indent=4)
+    def create_tables(self):
+        with self.conn:
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS chats (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    system_prompt TEXT
+                )
+            """)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    FOREIGN KEY (chat_id) REFERENCES chats (id)
+                )
+            """)
 
-    def load_chat(self):
-        if not os.path.exists(self.filename):
-            return [], ""
-        try:
-            with open(self.filename, 'r') as f:
-                data = json.load(f)
-            return data.get("messages", []), data.get("system_prompt", "")
-        except json.JSONDecodeError:
-            print(f"Error reading {self.filename}. Starting with empty chat.")
-            return [], ""
+    def save_chat(self, chat_name, messages, system_prompt):
+        with self.conn:
+            cursor = self.conn.cursor()
+            cursor.execute("INSERT OR REPLACE INTO chats (name, system_prompt) VALUES (?, ?)", (chat_name, system_prompt))
+            chat_id = cursor.lastrowid
+
+            cursor.executemany("""
+                INSERT INTO messages (chat_id, role, content) VALUES (?, ?, ?)
+            """, [(chat_id, msg['role'], msg['content']) for msg in messages])
+
+    def load_chat(self, chat_name):
+        with self.conn:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT id, system_prompt FROM chats WHERE name = ?", (chat_name,))
+            result = cursor.fetchone()
+            
+            if result:
+                chat_id, system_prompt = result
+                cursor.execute("SELECT role, content FROM messages WHERE chat_id = ? ORDER BY id", (chat_id,))
+                messages = [{'role': role, 'content': content} for role, content in cursor.fetchall()]
+                return messages, system_prompt
+            else:
+                return [], ""
+
+    def get_chat_list(self):
+        with self.conn:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT name FROM chats")
+            return [row[0] for row in cursor.fetchall()]
+
+    def delete_chat(self, chat_name):
+        with self.conn:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT id FROM chats WHERE name = ?", (chat_name,))
+            result = cursor.fetchone()
+            if result:
+                chat_id = result[0]
+                cursor.execute("DELETE FROM messages WHERE chat_id = ?", (chat_id,))
+                cursor.execute("DELETE FROM chats WHERE id = ?", (chat_id,))
+
+    def close(self):
+        self.conn.close()
 
 class NetworkWorker(QThread):
     response_received = pyqtSignal(str)
@@ -167,7 +215,7 @@ class SettingsDialog(QDialog):
 
         ConfigManager.save_config(self.parent.config)
         self.parent.apply_settings()
-        self.parent.chat_manager.save_chat(self.parent.messages, self.parent.system_prompt)
+        self.parent.chat_manager.save_chat(self.parent.current_chat_name, self.parent.messages, self.parent.system_prompt)
         self.parent.ollama_models = self.parent.get_ollama_models()  # Refresh Ollama models
         self.close()
 
@@ -175,8 +223,9 @@ class Chatbox(QWidget):
     def __init__(self):
         super().__init__()
         self.config = ConfigManager.load_config()
-        self.chat_manager = ChatManager(self.config["current_chat_filename"])
-        self.messages, self.system_prompt = self.chat_manager.load_chat()
+        self.chat_manager = ChatManager()
+        self.current_chat_name = self.config.get("current_chat_name", "chat_1")
+        self.messages, self.system_prompt = self.chat_manager.load_chat(self.current_chat_name)
         self.ollama_models = self.get_ollama_models()
         self.initUI()
         self.apply_settings()
@@ -209,6 +258,10 @@ class Chatbox(QWidget):
         self.load_chat_button.clicked.connect(self.load_chat)
         input_layout.addWidget(self.load_chat_button)
 
+        self.delete_chat_button = QPushButton("Delete Chat")
+        self.delete_chat_button.clicked.connect(self.delete_chat)
+        input_layout.addWidget(self.delete_chat_button)
+
         layout.addLayout(input_layout)
 
         self.setLayout(layout)
@@ -219,11 +272,12 @@ class Chatbox(QWidget):
         self.chat_history.setStyleSheet(f"background-color: black; color: {self.config['user_color']};")
         self.chat_history.setFont(QFont("Courier", self.config["fontsize"]))
         self.user_input.setFont(QFont("Courier", self.config["fontsize"]))
+        self.messages, self.system_prompt = self.chat_manager.load_chat(self.current_chat_name)
         self.load_chat_history()
 
     def show_settings(self):
         dialog = SettingsDialog(self)
-        dialog.exec_()
+        dialog.exec()
 
     def send_message(self):
         user_message = self.user_input.text()
@@ -233,6 +287,8 @@ class Chatbox(QWidget):
         self.messages.append({"role": "user", "content": user_message})
         self.chat_history.append(f"<font color='{self.config['user_color']}'>User: {user_message}</font>")
         self.user_input.clear()
+
+        self.chat_manager.save_chat(self.current_chat_name, self.messages, self.system_prompt)
 
         if self.config["current_mode"] == "openai":
             url = "https://api.openai.com/v1/chat/completions"
@@ -274,7 +330,7 @@ class Chatbox(QWidget):
     def handle_response(self, response):
         self.messages.append({"role": "assistant", "content": response})
         self.chat_history.append(f"<font color='{self.config['assistant_color']}'>Assistant: {response}</font>")
-        self.chat_manager.save_chat(self.messages, self.system_prompt)
+        self.chat_manager.save_chat(self.current_chat_name, self.messages, self.system_prompt)
 
     def handle_error(self, error):
         self.chat_history.append(f"<font color='red'>Error: {error}</font>")
@@ -288,27 +344,37 @@ class Chatbox(QWidget):
     def new_chat(self):
         self.messages = []
         self.chat_history.clear()
-        new_filename = f"chat_{len([f for f in os.listdir() if f.startswith('chat_') and f.endswith('.json')]) + 1}.json"
-        self.config["current_chat_filename"] = new_filename
-        self.chat_manager = ChatManager(new_filename)
+        chat_list = self.chat_manager.get_chat_list()
+        new_chat_name = f"chat_{len(chat_list) + 1}"
+        self.current_chat_name = new_chat_name
+        self.config["current_chat_name"] = new_chat_name
         ConfigManager.save_config(self.config)
-        self.chat_manager.save_chat(self.messages, self.system_prompt)
+        self.chat_manager.save_chat(new_chat_name, self.messages, self.system_prompt)
 
     def load_chat(self):
-        filename, _ = QFileDialog.getOpenFileName(self, "Load Chat", "", "JSON Files (*.json)")
-        if filename:
-            self.config["current_chat_filename"] = filename
-            self.chat_manager = ChatManager(filename)
-            self.messages, self.system_prompt = self.chat_manager.load_chat()
+        chat_list = self.chat_manager.get_chat_list()
+        chat_name, ok = QInputDialog.getItem(self, "Load Chat", "Select a chat to load:", chat_list, 0, False)
+        if ok and chat_name:
+            self.current_chat_name = chat_name
+            self.config["current_chat_name"] = chat_name
+            self.messages, self.system_prompt = self.chat_manager.load_chat(chat_name)
             ConfigManager.save_config(self.config)
             self.load_chat_history()
+
+    def delete_chat(self):
+        chat_list = self.chat_manager.get_chat_list()
+        chat_name, ok = QInputDialog.getItem(self, "Delete Chat", "Select a chat to delete:", chat_list, 0, False)
+        if ok and chat_name:
+            self.chat_manager.delete_chat(chat_name)
+            if chat_name == self.current_chat_name:
+                self.new_chat()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     try:
         chat = Chatbox()
         chat.show()
-        sys.exit(app.exec_())
+        sys.exit(app.exec())
     except Exception as e:
         print(f"An error occurred: {e}")
         sys.exit(1)

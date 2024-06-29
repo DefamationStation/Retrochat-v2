@@ -1,10 +1,15 @@
 import os
 import sys
-import json
 import asyncio
 import aiohttp
 import sqlite3
+import base64
+import json
+import logging
+from dataclasses import dataclass, asdict
+from typing import List, Optional
 from prompt_toolkit import PromptSession
+from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.patch_stdout import patch_stdout
@@ -34,12 +39,27 @@ class ChatMessage:
     role: str
     content: str
 
+    def to_dict(self) -> dict:
+        return {
+            "role": self.role,
+            "content": base64.b64encode(self.content.encode()).decode()
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'ChatMessage':
+        return cls(
+            role=data["role"],
+            content=base64.b64decode(data["content"].encode()).decode()
+        )
+
 class ChatHistoryManager:
     def __init__(self, db_file: str, chat_name: str = 'default'):
         self.db_file = db_file
         self.chat_name = chat_name
         self.conn = sqlite3.connect(self.db_file)
         self._create_tables()
+        self._update_schema()  # Add this line
+        logging.basicConfig(level=logging.DEBUG)
 
     def _create_tables(self):
         with self.conn:
@@ -52,12 +72,36 @@ class ChatHistoryManager:
                 CREATE TABLE IF NOT EXISTS chat_messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id INTEGER,
-                    role TEXT NOT NULL,
-                    content TEXT NOT NULL,
+                    role TEXT,
+                    content TEXT,
+                    message_data TEXT,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY(session_id) REFERENCES chat_sessions(id)
                 );
             ''')
+
+    def _update_schema(self):
+        try:
+            with self.conn:
+                # Check if message_data column exists
+                cursor = self.conn.cursor()
+                cursor.execute("PRAGMA table_info(chat_messages)")
+                columns = [column[1] for column in cursor.fetchall()]
+                
+                if 'message_data' not in columns:
+                    # Add message_data column
+                    self.conn.execute('ALTER TABLE chat_messages ADD COLUMN message_data TEXT')
+                    
+                    # Migrate existing data
+                    self.conn.execute('''
+                        UPDATE chat_messages
+                        SET message_data = json_object('role', role, 'content', content)
+                        WHERE message_data IS NULL
+                    ''')
+                    
+                    logging.info("Database schema updated successfully.")
+        except Exception as e:
+            logging.error(f"Error updating database schema: {e}")
 
     def _get_session_id(self, chat_name: str) -> int:
         cursor = self.conn.cursor()
@@ -73,17 +117,24 @@ class ChatHistoryManager:
 
     def save_history(self, history: List[ChatMessage]):
         session_id = self._get_session_id(self.chat_name)
-        with self.conn:
-            self.conn.execute('DELETE FROM chat_messages WHERE session_id = ?', (session_id,))
-            self.conn.executemany('''
-                INSERT INTO chat_messages (session_id, role, content) VALUES (?, ?, ?)
-            ''', [(session_id, msg.role, msg.content) for msg in history])
+        try:
+            with self.conn:
+                self.conn.execute('DELETE FROM chat_messages WHERE session_id = ?', (session_id,))
+                self.conn.executemany('''
+                    INSERT INTO chat_messages (session_id, message_data) VALUES (?, ?)
+                ''', [(session_id, json.dumps(msg.to_dict())) for msg in history])
+        except Exception as e:
+            logging.error(f"Error saving chat history: {e}")
 
     def load_history(self) -> List[ChatMessage]:
         session_id = self._get_session_id(self.chat_name)
         cursor = self.conn.cursor()
-        cursor.execute('SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY timestamp', (session_id,))
-        return [ChatMessage(role, content) for role, content in cursor.fetchall()]
+        cursor.execute('SELECT message_data FROM chat_messages WHERE session_id = ? ORDER BY timestamp', (session_id,))
+        try:
+            return [ChatMessage.from_dict(json.loads(row[0])) for row in cursor.fetchall()]
+        except Exception as e:
+            logging.error(f"Error loading chat history: {e}")
+            return []
 
     def clear_history(self):
         session_id = self._get_session_id(self.chat_name)
@@ -114,19 +165,30 @@ class ChatHistoryManager:
 class ChatProvider(ABC):
     def __init__(self, history_manager: ChatHistoryManager):
         self.history_manager = history_manager
-        self.chat_history = history_manager.load_history()
+        self.chat_history = self.load_history()
+
+    def load_history(self) -> List[ChatMessage]:
+        try:
+            return self.history_manager.load_history()
+        except Exception as e:
+            logging.error(f"Error loading chat history: {e}")
+            return []
 
     @abstractmethod
     async def send_message(self, message: str):
-        self.add_to_history("user", message)
-        await self._send_message_to_api(message)
+        pass
 
     def add_to_history(self, role: str, content: str):
-        self.chat_history.append(ChatMessage(role, content))
+        # Encode newlines to prevent issues with multi-line messages
+        encoded_content = content.replace('\n', '\\n')
+        self.chat_history.append(ChatMessage(role, encoded_content))
         self.save_history()
 
     def save_history(self):
-        self.history_manager.save_history(self.chat_history)
+        try:
+            self.history_manager.save_history(self.chat_history)
+        except Exception as e:
+            logging.error(f"Error saving chat history: {e}")
 
     def display_history(self):
         if not self.chat_history:
@@ -134,10 +196,12 @@ class ChatProvider(ABC):
         else:
             console.print("Chat history loaded from previous session:", style="cyan")
             for entry in self.chat_history:
+                # Decode newlines when displaying
+                decoded_content = entry.content.replace('\\n', '\n')
                 if entry.role == "user":
-                    console.print(entry.content, style="green")
+                    console.print(decoded_content, style="green")
                 else:
-                    console.print(entry.content, style="yellow")
+                    console.print(decoded_content, style="yellow")
 
 class OllamaChatSession(ChatProvider):
     def __init__(self, model_url: str, model: str, history_manager: ChatHistoryManager):
@@ -443,36 +507,44 @@ class ChatApp:
 
             kb = KeyBindings()
 
-            @kb.add('enter')
+            @Condition
+            def is_multiline():
+                return '\n' in prompt_session.default_buffer.text
+
+            @kb.add('enter', filter=~is_multiline)
             def _(event):
-                buffer = event.current_buffer
-                if buffer.document.text.strip():  # Only process non-empty messages
-                    buffer.validate_and_handle()
-                else:
-                    buffer.insert_text('\n')
+                event.current_buffer.validate_and_handle()
+
+            @kb.add('enter', filter=is_multiline)
+            def _(event):
+                event.current_buffer.insert_text('\n')
 
             @kb.add('c-j')  # Ctrl+Enter
             def _(event):
-                event.current_buffer.insert_text('\n')
+                event.current_buffer.validate_and_handle()
 
             prompt_session = PromptSession(key_bindings=kb, multiline=True)
 
             while True:
-                with patch_stdout():
-                    user_input = await prompt_session.prompt_async("> ", multiline=True)
+                try:
+                    with patch_stdout():
+                        user_input = await prompt_session.prompt_async("> ", multiline=True)
 
-                user_input = user_input.strip()
-                if user_input.lower() == '/exit':
-                    console.print("Thank you for chatting. Goodbye!", style="cyan")
-                    break
-                elif user_input.startswith('/'):
-                    await self.command_handler.handle_command(user_input, session)
-                elif user_input:  # Only send non-empty messages
-                    await session.send_message(user_input)
-                    session.save_history()  # Save history after each message
+                    user_input = user_input.rstrip()  # Remove trailing whitespace but keep newlines
 
-        except KeyboardInterrupt:
-            console.print("\nProgram interrupted by user. Exiting...", style="cyan")
+                    if user_input.lower() == '/exit':
+                        console.print("Thank you for chatting. Goodbye!", style="cyan")
+                        break
+                    elif user_input.startswith('/'):
+                        await self.command_handler.handle_command(user_input, session)
+                    elif user_input:  # Only send non-empty messages
+                        await session.send_message(user_input)
+                        session.save_history()  # Save history after each message
+                except KeyboardInterrupt:
+                    continue  # Allow Ctrl+C to clear the current input
+                except EOFError:
+                    break  # Exit on Ctrl+D
+
         except Exception as e:
             console.print(f"\nAn unexpected error occurred: {e}", style="bold red")
         finally:
