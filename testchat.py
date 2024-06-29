@@ -164,6 +164,17 @@ class OllamaChatSession(ChatProvider):
                 else:
                     console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
 
+    def display_history(self):
+        if not self.chat_history:
+            console.print("No previous chat history.", style="cyan")
+        else:
+            console.print("Chat history loaded from previous session:", style="cyan")
+            for entry in self.chat_history:
+                if entry.role == "user":
+                    console.print(entry.content, style="green")
+                else:
+                    console.print(entry.content, style="yellow")
+
 class AnthropicChatSession(ChatProvider):
     def __init__(self, api_key: str, model_url: str, history_manager: ChatHistoryManager):
         super().__init__(history_manager)
