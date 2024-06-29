@@ -1,9 +1,9 @@
 import sys
 import subprocess
 import json
-from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QTextEdit, QLineEdit, QScrollArea, QHBoxLayout, QFrame, QLabel
-from PyQt5.QtCore import Qt, QPoint, QThread, pyqtSignal
-from PyQt5.QtGui import QTextCursor, QFont, QIcon, QPixmap
+from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QTextEdit, QLineEdit, QScrollArea, QHBoxLayout, QFrame, QLabel
+from PyQt6.QtCore import Qt, QPoint, QThread, pyqtSignal
+from PyQt6.QtGui import QTextCursor, QFont, QIcon, QPixmap
 from ctypes import windll, byref, c_int, sizeof
 
 def set_amoled_black_title_bar(window):
@@ -40,12 +40,12 @@ class Chatbox(QWidget):
 
     def create_transparent_icon(self):
         pixmap = QPixmap(64, 64)
-        pixmap.fill(Qt.transparent)
+        pixmap.fill(Qt.GlobalColor.transparent)
         return QIcon(pixmap)
 
     def initUI(self):
         self.setGeometry(300, 300, 1100, 550)
-        self.setWindowFlags(Qt.Window)
+        self.setWindowFlags(Qt.WindowType.Window)
         self.setWindowTitle("RetroChat")
 
         main_layout = QVBoxLayout()
@@ -60,9 +60,9 @@ class Chatbox(QWidget):
         self.chat_scroll_area = QScrollArea()
         self.chat_scroll_area.setWidgetResizable(True)
         self.chat_scroll_area.setWidget(self.chat_history)
-        self.chat_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.chat_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # Hide the vertical scrollbar
-        self.chat_scroll_area.setFrameShape(QFrame.NoFrame)
+        self.chat_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.chat_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)  # Hide the vertical scrollbar
+        self.chat_scroll_area.setFrameShape(QFrame.Shape.NoFrame)
         chat_layout.addWidget(self.chat_scroll_area)
 
         self.prompt_label = QLabel(">")
@@ -73,7 +73,7 @@ class Chatbox(QWidget):
         self.user_input.setFont(QFont("Courier New", self.fontsize))
         self.user_input.setStyleSheet(self.get_input_style())
 
-        input_layout.addWidget(self.prompt_label, 0, Qt.AlignLeft)
+        input_layout.addWidget(self.prompt_label, 0, Qt.AlignmentFlag.AlignLeft)
         input_layout.addWidget(self.user_input, 1)
 
         main_layout.addLayout(chat_layout)
@@ -142,9 +142,9 @@ class Chatbox(QWidget):
             self.send_to_backend(user_message)
 
     def append_message(self, message, color):
-        self.chat_history.setTextColor(Qt.green)
+        self.chat_history.setTextColor(Qt.GlobalColor.green)
         self.chat_history.append(message)
-        self.chat_history.moveCursor(QTextCursor.End)
+        self.chat_history.moveCursor(QTextCursor.MoveOperation.End)
 
     def send_to_backend(self, message):
         if self.backend_process and self.backend_process.stdin:
@@ -192,7 +192,7 @@ class OutputReader(QThread):
 
     def run(self):
         for line in iter(self.stream.readline, ''):
-            self.new_line.emit(line.strip(), Qt.yellow)  # Emit new line signal with the line read and color
+            self.new_line.emit(line.strip(), Qt.GlobalColor.yellow)  # Emit new line signal with the line read and color
         self.stream.close()
 
 if __name__ == "__main__":
@@ -201,4 +201,4 @@ if __name__ == "__main__":
     set_amoled_black_title_bar(chatbox)
     chatbox.start_backend()  # Start the backend process
     chatbox.show()
-    sys.exit(app.exec_())
+    sys.exit(app.exec())
