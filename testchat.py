@@ -128,7 +128,10 @@ class ChatProvider(ABC):
         else:
             console.print("Chat history loaded from previous session:", style="cyan")
             for entry in self.chat_history:
-                console.print(f"{entry.content}", style="green" if entry.role == "user" else "yellow")
+                if entry.role == "user":
+                    console.print(entry.content, style="green")
+                else:
+                    console.print(entry.content, style="yellow")
 
 class OllamaChatSession(ChatProvider):
     def __init__(self, model_url: str, model: str, history_manager: ChatHistoryManager):
@@ -337,7 +340,7 @@ class CommandHandler:
 
 class ChatApp:
     def __init__(self):
-        self.model_url_ollama = "http://localhost:11434/api/chat"
+        self.model_url_ollama = "http://192.168.1.82:11434/api/chat"
         self.model_url_anthropic = "https://api.anthropic.com/v1/messages"
         self.openai_base_url = "https://api.openai.com/v1/chat/completions"
         self.chat_name = 'default'
@@ -374,14 +377,14 @@ class ChatApp:
         return True
 
     async def select_ollama_model(self) -> str:
-        url = "http://localhost:11434/api/tags"
+        url = "http://192.168.1.82:11434/api/tags"
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as response:
                 if response.status == 200:
                     models_info = await response.json()
                     if isinstance(models_info, dict) and 'models' in models_info:
                         model_names = [model['name'] for model in models_info['models']]
-                        console.print("Available Ollama models:", style="green")
+                        console.print("Available Ollama models:", style="cyan")
                         for idx, model in enumerate(model_names):
                             console.print(f"{idx + 1}. {model}", style="cyan")
                         choice = Prompt.ask("Select a model number", choices=[str(i) for i in range(1, len(model_names) + 1)])
@@ -421,7 +424,7 @@ class ChatApp:
             session.display_history()
 
             while True:
-                user_input = Prompt.ask("> ")
+                user_input = input("> ")
                 if user_input.lower() == '/exit':
                     console.print("Thank you for chatting. Goodbye!", style="cyan")
                     break
