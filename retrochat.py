@@ -1,44 +1,39 @@
 import os
 import sys
-import time
 import json
-import requests
+import asyncio
+import aiohttp
 import sqlite3
-from colorama import init, Fore
-from dotenv import load_dotenv, set_key
+from prompt_toolkit import PromptSession
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.keys import Keys
+from prompt_toolkit.patch_stdout import patch_stdout
+from typing import List, Dict, Any
 from abc import ABC, abstractmethod
-from typing import List, Dict
+from dataclasses import dataclass
+from rich.console import Console
+from rich.prompt import Prompt
+from dotenv import load_dotenv, set_key
 
-# Initialize colorama for cross-platform colored terminal output
-init(autoreset=True)
-
-# Constants for user-specific storage
+# Constants
 USER_HOME = os.path.expanduser('~')
 RETROCHAT_DIR = os.path.join(USER_HOME, '.retrochat')
-os.makedirs(RETROCHAT_DIR, exist_ok=True)
-
 ENV_FILE = os.path.join(RETROCHAT_DIR, '.env')
 DB_FILE = os.path.join(RETROCHAT_DIR, 'chat_history.db')
 ANTHROPIC_API_KEY_NAME = "ANTHROPIC_API_KEY"
 OPENAI_API_KEY_NAME = "OPENAI_API_KEY"
 LAST_CHAT_NAME_KEY = "LAST_CHAT_NAME"
 
-# Utility functions
-def clear_screen():
-    os.system('cls' if os.name == 'nt' else 'clear')
+os.makedirs(RETROCHAT_DIR, exist_ok=True)
 
-def print_slow(text, delay=0.001, color=Fore.WHITE):
-    for char in text:
-        sys.stdout.write(color + char)
-        sys.stdout.flush()
-        time.sleep(delay)
-    print()
+# Initialize rich console
+console = Console()
 
-def print_streaming(text, color=Fore.WHITE):
-    sys.stdout.write(color + text)
-    sys.stdout.flush()
+@dataclass
+class ChatMessage:
+    role: str
+    content: str
 
-# Chat History Manager using SQLite
 class ChatHistoryManager:
     def __init__(self, db_file: str, chat_name: str = 'default'):
         self.db_file = db_file
@@ -48,14 +43,12 @@ class ChatHistoryManager:
 
     def _create_tables(self):
         with self.conn:
-            self.conn.execute('''
+            self.conn.executescript('''
                 CREATE TABLE IF NOT EXISTS chat_sessions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     chat_name TEXT NOT NULL UNIQUE,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            self.conn.execute('''
+                );
                 CREATE TABLE IF NOT EXISTS chat_messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id INTEGER,
@@ -63,37 +56,34 @@ class ChatHistoryManager:
                     content TEXT NOT NULL,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY(session_id) REFERENCES chat_sessions(id)
-                )
+                );
             ''')
 
-    def _get_session_id(self, chat_name: str):
+    def _get_session_id(self, chat_name: str) -> int:
         cursor = self.conn.cursor()
         cursor.execute('SELECT id FROM chat_sessions WHERE chat_name = ?', (chat_name,))
         session = cursor.fetchone()
         if session:
             return session[0]
-        else:
-            cursor.execute('INSERT INTO chat_sessions (chat_name) VALUES (?)', (chat_name,))
-            return cursor.lastrowid
+        cursor.execute('INSERT INTO chat_sessions (chat_name) VALUES (?)', (chat_name,))
+        return cursor.lastrowid
 
     def set_chat_name(self, chat_name: str):
         self.chat_name = chat_name
 
-    def save_history(self, history: List[Dict[str, str]]):
+    def save_history(self, history: List[ChatMessage]):
         session_id = self._get_session_id(self.chat_name)
         with self.conn:
             self.conn.execute('DELETE FROM chat_messages WHERE session_id = ?', (session_id,))
-            for message in history:
-                self.conn.execute('''
-                    INSERT INTO chat_messages (session_id, role, content) VALUES (?, ?, ?)
-                ''', (session_id, message['role'], message['content']))
+            self.conn.executemany('''
+                INSERT INTO chat_messages (session_id, role, content) VALUES (?, ?, ?)
+            ''', [(session_id, msg.role, msg.content) for msg in history])
 
-    def load_history(self) -> List[Dict[str, str]]:
+    def load_history(self) -> List[ChatMessage]:
         session_id = self._get_session_id(self.chat_name)
         cursor = self.conn.cursor()
         cursor.execute('SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY timestamp', (session_id,))
-        messages = cursor.fetchall()
-        return [{'role': role, 'content': content} for role, content in messages]
+        return [ChatMessage(role, content) for role, content in cursor.fetchall()]
 
     def clear_history(self):
         session_id = self._get_session_id(self.chat_name)
@@ -107,7 +97,7 @@ class ChatHistoryManager:
                 self.conn.execute('UPDATE chat_sessions SET chat_name = ? WHERE id = ?', (new_name, session_id))
             self.set_chat_name(new_name)
         except sqlite3.IntegrityError:
-            print_slow(f"Error: A chat with the name '{new_name}' already exists.", color=Fore.RED)
+            console.print(f"Error: A chat with the name '{new_name}' already exists.", style="bold red")
 
     def delete_history(self):
         session_id = self._get_session_id(self.chat_name)
@@ -121,103 +111,110 @@ class ChatHistoryManager:
         cursor.execute('SELECT chat_name FROM chat_sessions')
         return [row[0] for row in cursor.fetchall()]
 
-# Abstract base class for chat providers
 class ChatProvider(ABC):
     def __init__(self, history_manager: ChatHistoryManager):
         self.history_manager = history_manager
         self.chat_history = history_manager.load_history()
 
     @abstractmethod
-    def send_message(self, message: str):
-        pass
+    async def send_message(self, message: str):
+        self.add_to_history("user", message)
+        await self._send_message_to_api(message)
 
     def add_to_history(self, role: str, content: str):
-        self.chat_history.append({"role": role, "content": content})
+        self.chat_history.append(ChatMessage(role, content))
+        self.save_history()
 
     def save_history(self):
         self.history_manager.save_history(self.chat_history)
 
     def display_history(self):
         if not self.chat_history:
-            print_slow("No previous chat history.", color=Fore.CYAN)
+            console.print("No previous chat history.", style="cyan")
         else:
-            print_slow("Chat history loaded from previous session:", color=Fore.CYAN)
+            console.print("Chat history loaded from previous session:", style="cyan")
             for entry in self.chat_history:
-                role_color = Fore.GREEN if entry['role'] == 'user' else Fore.YELLOW
-                print_slow(f"{entry['content']}", color=role_color)
+                if entry.role == "user":
+                    console.print(entry.content, style="green")
+                else:
+                    console.print(entry.content, style="yellow")
 
-# Ollama chat session implementation with streaming
 class OllamaChatSession(ChatProvider):
     def __init__(self, model_url: str, model: str, history_manager: ChatHistoryManager):
         super().__init__(history_manager)
         self.model_url = model_url
         self.model = model
 
-    def send_message(self, message: str):
+    async def send_message(self, message: str):
         self.add_to_history("user", message)
         data = {
             "model": self.model,
-            "messages": self.chat_history,
-            "stream": True  # Enable streaming
+            "messages": [{"role": msg.role, "content": msg.content} for msg in self.chat_history],
+            "stream": True
         }
-        response = requests.post(self.model_url, json=data, stream=True)
-        if response.status_code == 200:
-            complete_message = ""
-            try:
-                for line in response.iter_lines(decode_unicode=True):
-                    if line:
-                        response_json = json.loads(line)
-                        message_content = response_json.get('message', {}).get('content', '')
-                        complete_message += message_content
-                        print_streaming(message_content, color=Fore.YELLOW)
-                        if response_json.get('done', False):
-                            break
-                self.add_to_history("assistant", complete_message)
-                self.save_history()
-                print()  # Print new line after the complete message
-            except Exception as e:
-                print_slow(f"Error processing response: {str(e)}", color=Fore.RED)
-        else:
-            print_slow(f"Error: {response.status_code} - {response.text}", color=Fore.RED)
+        async with aiohttp.ClientSession() as session:
+            async with session.post(self.model_url, json=data) as response:
+                if response.status == 200:
+                    complete_message = ""
+                    async for line in response.content:
+                        if line:
+                            response_json = json.loads(line)
+                            message_content = response_json.get('message', {}).get('content', '')
+                            complete_message += message_content
+                            console.print(message_content, end="", style="yellow")
+                            if response_json.get('done', False):
+                                break
+                    console.print()  # New line after complete message
+                    self.add_to_history("assistant", complete_message)
+                    self.save_history()
+                else:
+                    console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
 
-# Anthropic chat session implementation
+    def display_history(self):
+        if not self.chat_history:
+            console.print("No previous chat history.", style="cyan")
+        else:
+            console.print("Chat history loaded from previous session:", style="cyan")
+            for entry in self.chat_history:
+                if entry.role == "user":
+                    console.print(entry.content, style="green")
+                else:
+                    console.print(entry.content, style="yellow")
+
 class AnthropicChatSession(ChatProvider):
     def __init__(self, api_key: str, model_url: str, history_manager: ChatHistoryManager):
         super().__init__(history_manager)
         self.api_key = api_key
         self.model_url = model_url
 
-    def send_message(self, message: str):
+    async def send_message(self, message: str):
         self.add_to_history("user", message)
         data = {
             "model": "claude-3-5-sonnet-20240620",
             "max_tokens": 4096,
             "temperature": 0.0,
             "system": "Keep your answers short and to the point.",
-            "messages": self.chat_history
+            "messages": [{"role": msg.role, "content": msg.content} for msg in self.chat_history]
         }
         headers = {
             "Content-Type": "application/json",
             "X-API-Key": self.api_key,
             "anthropic-version": "2023-06-01"
         }
-        response = requests.post(self.model_url, json=data, headers=headers)
-        if response.status_code == 200:
-            try:
-                response_json = response.json()
-                assistant_message = response_json.get('content', [{}])[0].get('text', '')
-                if assistant_message:
-                    self.add_to_history("assistant", assistant_message)
-                    self.save_history()
-                    return assistant_message
+        async with aiohttp.ClientSession() as session:
+            async with session.post(self.model_url, json=data, headers=headers) as response:
+                if response.status == 200:
+                    response_json = await response.json()
+                    assistant_message = response_json.get('content', [{}])[0].get('text', '')
+                    if assistant_message:
+                        self.add_to_history("assistant", assistant_message)
+                        self.save_history()
+                        console.print(assistant_message, style="yellow")
+                    else:
+                        console.print("No response content received.", style="bold red")
                 else:
-                    return "No response content received."
-            except Exception as e:
-                return f"Error processing response: {str(e)}"
-        else:
-            return f"Error: {response.status_code} - {response.text}"
+                    console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
 
-# OpenAI chat session implementation
 class OpenAIChatSession(ChatProvider):
     def __init__(self, api_key: str, base_url: str, model: str, history_manager: ChatHistoryManager):
         super().__init__(history_manager)
@@ -225,168 +222,152 @@ class OpenAIChatSession(ChatProvider):
         self.base_url = base_url
         self.model = model
 
-    def send_message(self, message: str):
+    async def send_message(self, message: str):
         self.add_to_history("user", message)
         data = {
             "model": self.model,
-            "messages": [{"role": msg['role'], "content": msg['content']} for msg in self.chat_history],
-            "stream": True  # Enable streaming
+            "messages": [{"role": msg.role, "content": msg.content} for msg in self.chat_history],
+            "stream": True
         }
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}"
         }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(self.base_url, headers=headers, json=data) as response:
+                if response.status == 200:
+                    complete_message = ""
+                    async for line in response.content:
+                        if line:
+                            line = line.decode('utf-8').strip()
+                            if line.startswith("data: "):
+                                if line == "data: [DONE]":
+                                    break
+                                json_str = line[6:]  # Strip "data: " prefix
+                                try:
+                                    response_json = json.loads(json_str)
+                                    content = response_json['choices'][0]['delta'].get('content', '')
+                                    if content:
+                                        complete_message += content
+                                        console.print(content, end="", style="yellow")
+                                except json.JSONDecodeError:
+                                    continue
+                    console.print()  # New line after complete message
+                    self.add_to_history("assistant", complete_message)
+                    self.save_history()
+                else:
+                    console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
 
-        try:
-            response = requests.post(self.base_url, headers=headers, json=data, stream=True)
-            response.raise_for_status()
-
-            complete_message = ""
-            buffer = ""
-
-            for chunk in response.iter_lines(decode_unicode=True):
-                if chunk:
-                    if chunk.strip() == "data: [DONE]":
-                        break  # Skip processing the "[DONE]" message
-
-                    try:
-                        buffer += chunk
-                        if chunk.startswith("data: "):
-                            json_str = buffer[6:]  # Strip the "data: " prefix
-                            buffer = ""  # Clear the buffer
-
-                            if json_str.strip():  # Ensure it's not just whitespace
-                                response_json = json.loads(json_str)  # Parse the JSON
-                                
-                                # Extract content if available
-                                content = response_json['choices'][0]['delta'].get('content', '')
-                                if content:
-                                    complete_message += content
-                                    print_streaming(content, color=Fore.YELLOW)
-                    except json.JSONDecodeError as e:
-                        print_slow(f"Error decoding JSON: {chunk} - {str(e)}", color=Fore.RED)
-                        continue
-
-            self.add_to_history("assistant", complete_message)
-            self.save_history()
-            print()  # Print new line after the complete message
-        except Exception as e:
-            print_slow(f"Error processing response: {str(e)}", color=Fore.RED)
-
-# Factory pattern for creating chat providers
 class ChatProviderFactory:
     @staticmethod
     def create_provider(provider_type: str, *args, **kwargs) -> ChatProvider:
-        if provider_type == 'Ollama':
-            return OllamaChatSession(*args, **kwargs)
-        elif provider_type == 'Anthropic':
-            return AnthropicChatSession(*args, **kwargs)
-        elif provider_type == 'OpenAI':
-            return OpenAIChatSession(*args, **kwargs)
-        else:
-            raise ValueError(f"Unsupported provider type: {provider_type}")
+        providers = {
+            'Ollama': OllamaChatSession,
+            'Anthropic': AnthropicChatSession,
+            'OpenAI': OpenAIChatSession
+        }
+        provider_class = providers.get(provider_type)
+        if provider_class:
+            return provider_class(*args, **kwargs)
+        raise ValueError(f"Unsupported provider type: {provider_type}")
 
 class CommandHandler:
     def __init__(self, history_manager: ChatHistoryManager):
         self.history_manager = history_manager
 
-    def handle_command(self, command: str, session: ChatProvider):
-        command_parts = command.split(' ', 2)
-        if len(command_parts) < 2:
-            print_slow("Command requires a value. Usage examples:\n"
-                       "/chat rename <new_name>\n"
-                       "/chat delete\n"
-                       "/chat new <chat_name>\n"
-                       "/chat list\n"
-                       "/chat open <chat_name>", color=Fore.RED)
+    async def handle_command(self, command: str, session: ChatProvider):
+        cmd_parts = command.split(maxsplit=2)
+        if len(cmd_parts) < 2:
+            self.display_help()
             return
 
-        cmd = command_parts[0]
-        sub_cmd = command_parts[1]
+        cmd, sub_cmd, *args = cmd_parts + ['']  # Ensure at least 3 elements
 
         if cmd == '/chat':
-            if sub_cmd == 'rename':
-                if len(command_parts) == 3:
-                    new_name = command_parts[2].strip()
-                    self.history_manager.rename_history(new_name)
-                    print_slow(f"Chat renamed to '{new_name}'", color=Fore.CYAN)
-                    self.save_last_chat_name(new_name)  # Save the new chat name to .env
-                else:
-                    print_slow("Please provide a new name for the chat. Usage: /chat rename <new_name>", color=Fore.RED)
-
-            elif sub_cmd == 'delete':
-                self.history_manager.delete_history()
-                print_slow("Current chat history deleted.", color=Fore.CYAN)
-
-            elif sub_cmd == 'new':
-                if len(command_parts) == 3:
-                    new_name = command_parts[2].strip()
-                    self.history_manager.set_chat_name(new_name)
-                    self.history_manager.save_history([])  # Start with an empty history
-                    print_slow(f"New chat '{new_name}' created.", color=Fore.CYAN)
-                    self.save_last_chat_name(new_name)  # Save the new chat name to .env
-                else:
-                    print_slow("Please provide a name for the new chat. Usage: /chat new <chat_name>", color=Fore.RED)
-
-            elif sub_cmd == 'reset':
-                self.history_manager.clear_history()
-                session.chat_history = []
-                print_slow("Chat history has been reset.", color=Fore.CYAN)
-
-            elif sub_cmd == 'list':
-                chats = self.history_manager.list_chats()
-                if chats:
-                    print_slow("Available chats:", color=Fore.CYAN)
-                    for chat in chats:
-                        print_slow(chat, color=Fore.GREEN)
-                else:
-                    print_slow("No available chats.", color=Fore.RED)
-
-            elif sub_cmd == 'open':
-                if len(command_parts) == 3:
-                    chat_name = command_parts[2].strip()
-                    if chat_name in self.history_manager.list_chats():
-                        self.history_manager.set_chat_name(chat_name)
-                        session.chat_history = self.history_manager.load_history()
-                        print_slow(f"Chat '{chat_name}' opened.", color=Fore.CYAN)
-                        session.display_history()
-                        self.save_last_chat_name(chat_name)  # Save the opened chat name to .env
-                    else:
-                        print_slow(f"Chat '{chat_name}' does not exist.", color=Fore.RED)
-                else:
-                    print_slow("Please provide the name of the chat to open. Usage: /chat open <chat_name>", color=Fore.RED)
-
+            method_name = f"handle_{sub_cmd}"
+            method = getattr(self, method_name, None)
+            if method:
+                await method(args[0], session)
             else:
-                print_slow("Unknown command. Available commands are:\n"
-                           "/chat rename <new_name>\n"
-                           "/chat delete\n"
-                           "/chat new <chat_name>\n"
-                           "/chat reset\n"
-                           "/chat list\n"
-                           "/chat open <chat_name>", color=Fore.RED)
-
+                self.display_help()
         else:
-            print_slow("Unknown command.", color=Fore.RED)
+            self.display_help()
+
+    async def handle_rename(self, new_name: str, session: ChatProvider):
+        if new_name:
+            self.history_manager.rename_history(new_name)
+            console.print(f"Chat renamed to '{new_name}'", style="cyan")
+            self.save_last_chat_name(new_name)
+        else:
+            console.print("Please provide a new name for the chat. Usage: /chat rename <new_name>", style="bold red")
+
+    async def handle_delete(self, _, session: ChatProvider):
+        self.history_manager.delete_history()
+        console.print("Current chat history deleted.", style="cyan")
+
+    async def handle_new(self, new_name: str, session: ChatProvider):
+        if new_name:
+            self.history_manager.set_chat_name(new_name)
+            self.history_manager.save_history([])
+            console.print(f"New chat '{new_name}' created.", style="cyan")
+            self.save_last_chat_name(new_name)
+        else:
+            console.print("Please provide a name for the new chat. Usage: /chat new <chat_name>", style="bold red")
+
+    async def handle_reset(self, _, session: ChatProvider):
+        self.history_manager.clear_history()
+        session.chat_history = []
+        console.print("Chat history has been reset.", style="cyan")
+
+    async def handle_list(self, _, session: ChatProvider):
+        chats = self.history_manager.list_chats()
+        if chats:
+            console.print("Available chats:", style="cyan")
+            for chat in chats:
+                console.print(chat, style="green")
+        else:
+            console.print("No available chats.", style="bold red")
+
+    async def handle_open(self, chat_name: str, session: ChatProvider):
+        if chat_name:
+            if chat_name in self.history_manager.list_chats():
+                self.history_manager.set_chat_name(chat_name)
+                session.chat_history = self.history_manager.load_history()
+                console.print(f"Chat '{chat_name}' opened.", style="cyan")
+                session.display_history()
+                self.save_last_chat_name(chat_name)
+            else:
+                console.print(f"Chat '{chat_name}' does not exist.", style="bold red")
+        else:
+            console.print("Please provide the name of the chat to open. Usage: /chat open <chat_name>", style="bold red")
 
     def save_last_chat_name(self, chat_name: str):
         set_key(ENV_FILE, LAST_CHAT_NAME_KEY, chat_name)
 
+    def display_help(self):
+        console.print("Available commands:", style="cyan")
+        console.print("/chat rename <new_name> - Rename the current chat", style="green")
+        console.print("/chat delete - Delete the current chat", style="green")
+        console.print("/chat new <chat_name> - Create a new chat", style="green")
+        console.print("/chat reset - Reset the current chat history", style="green")
+        console.print("/chat list - List all available chats", style="green")
+        console.print("/chat open <chat_name> - Open a specific chat", style="green")
+        console.print("/help - Display this help message", style="green")
+        console.print("/exit - Exit the program", style="green")
+
 class ChatApp:
-    def __init__(self, history_manager: ChatHistoryManager, command_handler: CommandHandler, provider_factory: ChatProviderFactory):
+    def __init__(self):
         self.model_url_ollama = "http://192.168.1.82:11434/api/chat"
         self.model_url_anthropic = "https://api.anthropic.com/v1/messages"
         self.openai_base_url = "https://api.openai.com/v1/chat/completions"
-        self.chat_name = 'default'  # Default value before loading from .env
-        self.history_manager = history_manager
-        self.command_handler = command_handler
-        self.provider_factory = provider_factory
+        self.chat_name = 'default'
+        self.history_manager = ChatHistoryManager(DB_FILE)
+        self.command_handler = CommandHandler(self.history_manager)
+        self.provider_factory = ChatProviderFactory()
         self.openai_api_key = None
         self.anthropic_api_key = None
 
-        # Load environment variables and initialize API keys if present
         self.load_env_variables()
-
-        # Save the initial chat name to .env
         self.save_last_chat_name(self.chat_name)
 
     def load_env_variables(self):
@@ -394,114 +375,112 @@ class ChatApp:
             load_dotenv(ENV_FILE)
             self.openai_api_key = os.getenv(OPENAI_API_KEY_NAME)
             self.anthropic_api_key = os.getenv(ANTHROPIC_API_KEY_NAME)
-            self.chat_name = os.getenv(LAST_CHAT_NAME_KEY, 'default')  # Load last chat name or default
-            self.history_manager.set_chat_name(self.chat_name)  # Set the chat name in the history manager
+            self.chat_name = os.getenv(LAST_CHAT_NAME_KEY, 'default')
+            self.history_manager.set_chat_name(self.chat_name)
 
-    def ensure_openai_api_key(self):
-        if not self.openai_api_key:
-            print_slow("OpenAI API key is not set. Please enter your OpenAI API key.", color=Fore.CYAN)
-            self.openai_api_key = input(Fore.GREEN + "Enter your OpenAI API key: ").strip()
-            if self.openai_api_key:
-                set_key(ENV_FILE, OPENAI_API_KEY_NAME, self.openai_api_key)
-                load_dotenv(ENV_FILE)  # Reload .env to update environment with new key
-                print_slow("OpenAI API key has been set and saved in the .env file.", color=Fore.CYAN)
+    def ensure_api_key(self, key_name: str, env_var: str):
+        if not getattr(self, key_name):
+            console.print(f"{env_var} is not set. Please enter your API key.", style="cyan")
+            api_key = Prompt.ask(f"Enter your {env_var}")
+            if api_key:
+                set_key(ENV_FILE, env_var, api_key)
+                load_dotenv(ENV_FILE)
+                setattr(self, key_name, api_key)
+                console.print(f"{env_var} has been set and saved in the .env file.", style="cyan")
+                return True
             else:
-                print_slow("No API key provided. OpenAI mode cannot be used.", color=Fore.RED)
+                console.print(f"No API key provided. {key_name.replace('_', ' ').title()} mode cannot be used.", style="bold red")
                 return False
         return True
 
-    def ensure_anthropic_api_key(self):
-        if not self.anthropic_api_key:
-            print_slow(f"{ANTHROPIC_API_KEY_NAME} is not set. Please enter your Anthropic API key.", color=Fore.CYAN)
-            self.anthropic_api_key = input(Fore.GREEN + "Enter your Anthropic API key: ").strip()
-            if self.anthropic_api_key:
-                set_key(ENV_FILE, ANTHROPIC_API_KEY_NAME, self.anthropic_api_key)
-                load_dotenv(ENV_FILE)  # Reload .env to update environment with new key
-                print_slow(f"{ANTHROPIC_API_KEY_NAME} has been set and saved in {ENV_FILE}.", color=Fore.CYAN)
-            else:
-                print_slow("No API key provided. Anthropic mode cannot be used.", color=Fore.RED)
-                return False
-        return True
-
-    def select_ollama_model(self) -> List[str]:
+    async def select_ollama_model(self) -> str:
         url = "http://192.168.1.82:11434/api/tags"
-        response = requests.get(url)
-        if response.status_code == 200:
-            models_info = response.json()
-            if isinstance(models_info, dict) and 'models' in models_info:
-                model_names = [model['name'] for model in models_info['models']]
-                return model_names
-            else:
-                print_slow("Unexpected API response structure. Expected a dictionary with 'models'.", color=Fore.RED)
-                return []
-        else:
-            print_slow(f"Error fetching Ollama models: {response.status_code} - {response.text}", color=Fore.RED)
-            return []
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    models_info = await response.json()
+                    if isinstance(models_info, dict) and 'models' in models_info:
+                        model_names = [model['name'] for model in models_info['models']]
+                        console.print("Available Ollama models:", style="cyan")
+                        for idx, model in enumerate(model_names):
+                            console.print(f"{idx + 1}. {model}", style="cyan")
+                        choice = Prompt.ask("Select a model number", choices=[str(i) for i in range(1, len(model_names) + 1)])
+                        return model_names[int(choice) - 1]
+                    else:
+                        console.print("Unexpected API response structure.", style="bold red")
+                else:
+                    console.print(f"Error fetching Ollama models: {response.status} - {await response.text()}", style="bold red")
+        return None
 
     def save_last_chat_name(self, chat_name: str):
         set_key(ENV_FILE, LAST_CHAT_NAME_KEY, chat_name)
 
-    def start(self):
+    async def start(self):
         try:
-            clear_screen()
-            print_slow("Welcome to the Chat Program!", color=Fore.GREEN)
-            print_slow("Select the mode:\n1. Ollama\n2. Anthropic\n3. OpenAI", color=Fore.CYAN)
+            console.clear()
+            console.print("Welcome to the Chat Program!", style="bold green")
+            console.print("Select the mode:\n1. Ollama\n2. Anthropic\n3. OpenAI", style="cyan")
 
-            mode = input(Fore.GREEN + "Enter 1, 2, or 3: ").strip()
+            mode = Prompt.ask("Enter your choice", choices=["1", "2", "3"])
 
             if mode == '1':
-                models = self.select_ollama_model()
-                if not models:
-                    return
-                print_slow("Available Ollama models:", color=Fore.GREEN)
-                for idx, model in enumerate(models):
-                    print_slow(f"{idx + 1}. {model}", color=Fore.CYAN)
-                choice = int(input(Fore.GREEN + "Select a model number: ")) - 1
-                if 0 <= choice < len(models):
-                    selected_model = models[choice]
-                else:
-                    print_slow("Invalid choice. Please restart and try again.", color=Fore.RED)
+                selected_model = await self.select_ollama_model()
+                if not selected_model:
                     return
                 session = self.provider_factory.create_provider('Ollama', self.model_url_ollama, selected_model, self.history_manager)
-
             elif mode == '2':
-                if not self.ensure_anthropic_api_key():
+                if not self.ensure_api_key('anthropic_api_key', ANTHROPIC_API_KEY_NAME):
                     return
                 session = self.provider_factory.create_provider('Anthropic', self.anthropic_api_key, self.model_url_anthropic, self.history_manager)
-
             elif mode == '3':
-                if not self.ensure_openai_api_key():
+                if not self.ensure_api_key('openai_api_key', OPENAI_API_KEY_NAME):
                     return
                 session = self.provider_factory.create_provider('OpenAI', self.openai_api_key, self.openai_base_url, "gpt-4", self.history_manager)
 
-            else:
-                print_slow("Invalid selection. Please restart the program and choose a valid mode.", color=Fore.RED)
-                return
-
-            print_slow(f"Chat session started. Type your messages or use commands (e.g., /chat list).", color=Fore.CYAN)
+            console.print(f"Chat session started. Type your messages and press Enter to send.", style="cyan")
+            console.print("Use Ctrl+Enter for new lines in multi-line messages.", style="cyan")
             session.display_history()
 
+            kb = KeyBindings()
+
+            @kb.add('enter')
+            def _(event):
+                buffer = event.current_buffer
+                if buffer.document.text.strip():  # Only process non-empty messages
+                    buffer.validate_and_handle()
+                else:
+                    buffer.insert_text('\n')
+
+            @kb.add('c-j')  # Ctrl+Enter
+            def _(event):
+                event.current_buffer.insert_text('\n')
+
+            prompt_session = PromptSession(key_bindings=kb, multiline=True)
+
             while True:
-                user_input = input(Fore.GREEN + "> ").strip()
+                with patch_stdout():
+                    user_input = await prompt_session.prompt_async("> ", multiline=True)
+
+                user_input = user_input.strip()
                 if user_input.lower() == '/exit':
-                    print_slow("Thank you for chatting. Goodbye!", color=Fore.CYAN)
+                    console.print("Thank you for chatting. Goodbye!", style="cyan")
                     break
                 elif user_input.startswith('/'):
-                    self.command_handler.handle_command(user_input, session)
-                else:
-                    response = session.send_message(user_input)
-                    if response:
-                        print_slow(response, color=Fore.YELLOW)
+                    await self.command_handler.handle_command(user_input, session)
+                elif user_input:  # Only send non-empty messages
+                    await session.send_message(user_input)
+                    session.save_history()  # Save history after each message
 
         except KeyboardInterrupt:
-            print_slow("\nProgram interrupted by user. Exiting...", color=Fore.CYAN)
+            console.print("\nProgram interrupted by user. Exiting...", style="cyan")
         except Exception as e:
-            print_slow(f"\nAn unexpected error occurred: {e}", color=Fore.RED)
+            console.print(f"\nAn unexpected error occurred: {e}", style="bold red")
+        finally:
+            session.save_history()  # Ensure history is saved when exiting
+
+async def main():
+    app = ChatApp()
+    await app.start()
 
 if __name__ == "__main__":
-    history_manager = ChatHistoryManager(DB_FILE)
-    command_handler = CommandHandler(history_manager)
-    provider_factory = ChatProviderFactory()
-
-    app = ChatApp(history_manager, command_handler, provider_factory)
-    app.start()
+    asyncio.run(main())
