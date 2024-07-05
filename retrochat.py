@@ -42,14 +42,14 @@ class ChatMessage:
     def to_dict(self) -> dict:
         return {
             "role": self.role,
-            "content": base64.b64encode(self.content.encode()).decode()
+            "content": self.content  # Remove base64 encoding
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> 'ChatMessage':
         return cls(
             role=data["role"],
-            content=base64.b64decode(data["content"].encode()).decode()
+            content=data["content"]  # Remove base64 decoding
         )
 
 class ChatHistoryManager:
@@ -72,9 +72,8 @@ class ChatHistoryManager:
                 CREATE TABLE IF NOT EXISTS chat_messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id INTEGER,
-                    role TEXT,
-                    content TEXT,
-                    message_data TEXT,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY(session_id) REFERENCES chat_sessions(id)
                 );
@@ -87,13 +86,8 @@ class ChatHistoryManager:
                 cursor.execute("PRAGMA table_info(chat_messages)")
                 columns = [column[1] for column in cursor.fetchall()]
                 
-                if 'message_data' not in columns:
-                    self.conn.execute('ALTER TABLE chat_messages ADD COLUMN message_data TEXT')
-                    self.conn.execute('''
-                        UPDATE chat_messages
-                        SET message_data = json_object('role', role, 'content', content)
-                        WHERE message_data IS NULL
-                    ''')
+                if 'role' not in columns:
+                    self.conn.execute('ALTER TABLE chat_messages ADD COLUMN role TEXT NOT NULL DEFAULT "user"')
                     logging.info("Database schema updated successfully.")
         except Exception as e:
             logging.error(f"Error updating database schema: {e}")
@@ -116,17 +110,17 @@ class ChatHistoryManager:
             with self.conn:
                 self.conn.execute('DELETE FROM chat_messages WHERE session_id = ?', (session_id,))
                 self.conn.executemany('''
-                    INSERT INTO chat_messages (session_id, message_data) VALUES (?, ?)
-                ''', [(session_id, json.dumps(msg.to_dict())) for msg in history])
+                    INSERT INTO chat_messages (session_id, role, content) VALUES (?, ?, ?)
+                ''', [(session_id, msg.role, msg.content) for msg in history])
         except Exception as e:
             logging.error(f"Error saving chat history: {e}")
 
     def load_history(self) -> List[ChatMessage]:
         session_id = self._get_session_id(self.chat_name)
         cursor = self.conn.cursor()
-        cursor.execute('SELECT message_data FROM chat_messages WHERE session_id = ? ORDER BY timestamp', (session_id,))
+        cursor.execute('SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY timestamp', (session_id,))
         try:
-            return [ChatMessage.from_dict(json.loads(row[0])) for row in cursor.fetchall()]
+            return [ChatMessage(role=row[0], content=row[1]) for row in cursor.fetchall()]
         except Exception as e:
             logging.error(f"Error loading chat history: {e}")
             return []
@@ -174,8 +168,7 @@ class ChatProvider(ABC):
         pass
 
     def add_to_history(self, role: str, content: str):
-        encoded_content = content.replace('\n', '\\n')
-        self.chat_history.append(ChatMessage(role, encoded_content))
+        self.chat_history.append(ChatMessage(role, content))
         self.save_history()
 
     def save_history(self):
@@ -190,11 +183,10 @@ class ChatProvider(ABC):
         else:
             console.print("Chat history loaded from previous session:", style="cyan")
             for entry in self.chat_history:
-                decoded_content = entry.content.replace('\\n', '\n')
                 if entry.role == "user":
-                    console.print(decoded_content, style="green")
+                    console.print(entry.content, style="green")
                 else:
-                    console.print(decoded_content, style="yellow")
+                    console.print(entry.content, style="yellow")
 
 class OllamaChatSession(ChatProvider):
     def __init__(self, model_url: str, model: str, history_manager: ChatHistoryManager):
@@ -483,6 +475,9 @@ class ChatApp:
                     return
                 session = self.provider_factory.create_provider('OpenAI', self.openai_api_key, self.openai_base_url, "gpt-4", self.history_manager)
 
+            console.print(f"Chat session started. Type your messages and press Enter to send.", style="cyan")
+            console.print("Use '...' at the end of a line to continue input on the next line.", style="cyan")
+            console.print("Use an empty line to finish your multi-line input.", style="cyan")
             session.display_history()
 
             while True:
