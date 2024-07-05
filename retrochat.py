@@ -456,7 +456,7 @@ class ChatApp:
     async def start(self):
         try:
             console.clear()
-            console.print("Welcome to the Chat Program!", style="bold green")
+            console.print("Welcome to Retrochat!", style="bold green")
             console.print("Select the mode:\n1. Ollama\n2. Anthropic\n3. OpenAI", style="cyan")
 
             mode = Prompt.ask("Enter your choice", choices=["1", "2", "3"])
@@ -475,9 +475,6 @@ class ChatApp:
                     return
                 session = self.provider_factory.create_provider('OpenAI', self.openai_api_key, self.openai_base_url, "gpt-4", self.history_manager)
 
-            console.print(f"Chat session started. Type your messages and press Enter to send.", style="cyan")
-            console.print("Use '...' at the end of a line to continue input on the next line.", style="cyan")
-            console.print("Use an empty line to finish your multi-line input.", style="cyan")
             session.display_history()
 
             while True:
