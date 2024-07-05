@@ -58,7 +58,7 @@ class ChatHistoryManager:
         self.chat_name = chat_name
         self.conn = sqlite3.connect(self.db_file)
         self._create_tables()
-        self._update_schema()  # Add this line
+        self._update_schema()
         logging.basicConfig(level=logging.DEBUG)
 
     def _create_tables(self):
@@ -83,22 +83,17 @@ class ChatHistoryManager:
     def _update_schema(self):
         try:
             with self.conn:
-                # Check if message_data column exists
                 cursor = self.conn.cursor()
                 cursor.execute("PRAGMA table_info(chat_messages)")
                 columns = [column[1] for column in cursor.fetchall()]
                 
                 if 'message_data' not in columns:
-                    # Add message_data column
                     self.conn.execute('ALTER TABLE chat_messages ADD COLUMN message_data TEXT')
-                    
-                    # Migrate existing data
                     self.conn.execute('''
                         UPDATE chat_messages
                         SET message_data = json_object('role', role, 'content', content)
                         WHERE message_data IS NULL
                     ''')
-                    
                     logging.info("Database schema updated successfully.")
         except Exception as e:
             logging.error(f"Error updating database schema: {e}")
@@ -179,7 +174,6 @@ class ChatProvider(ABC):
         pass
 
     def add_to_history(self, role: str, content: str):
-        # Encode newlines to prevent issues with multi-line messages
         encoded_content = content.replace('\n', '\\n')
         self.chat_history.append(ChatMessage(role, encoded_content))
         self.save_history()
@@ -196,7 +190,6 @@ class ChatProvider(ABC):
         else:
             console.print("Chat history loaded from previous session:", style="cyan")
             for entry in self.chat_history:
-                # Decode newlines when displaying
                 decoded_content = entry.content.replace('\\n', '\n')
                 if entry.role == "user":
                     console.print(decoded_content, style="green")
@@ -228,22 +221,11 @@ class OllamaChatSession(ChatProvider):
                             console.print(message_content, end="", style="yellow")
                             if response_json.get('done', False):
                                 break
-                    console.print()  # New line after complete message
+                    console.print()
                     self.add_to_history("assistant", complete_message)
                     self.save_history()
                 else:
                     console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
-
-    def display_history(self):
-        if not self.chat_history:
-            console.print("No previous chat history.", style="cyan")
-        else:
-            console.print("Chat history loaded from previous session:", style="cyan")
-            for entry in self.chat_history:
-                if entry.role == "user":
-                    console.print(entry.content, style="green")
-                else:
-                    console.print(entry.content, style="yellow")
 
 class AnthropicChatSession(ChatProvider):
     def __init__(self, api_key: str, model_url: str, history_manager: ChatHistoryManager):
@@ -307,7 +289,7 @@ class OpenAIChatSession(ChatProvider):
                             if line.startswith("data: "):
                                 if line == "data: [DONE]":
                                     break
-                                json_str = line[6:]  # Strip "data: " prefix
+                                json_str = line[6:]
                                 try:
                                     response_json = json.loads(json_str)
                                     content = response_json['choices'][0]['delta'].get('content', '')
@@ -316,7 +298,7 @@ class OpenAIChatSession(ChatProvider):
                                         console.print(content, end="", style="yellow")
                                 except json.JSONDecodeError:
                                     continue
-                    console.print()  # New line after complete message
+                    console.print()
                     self.add_to_history("assistant", complete_message)
                     self.save_history()
                 else:
@@ -345,7 +327,7 @@ class CommandHandler:
             self.display_help()
             return
 
-        cmd, sub_cmd, *args = cmd_parts + ['']  # Ensure at least 3 elements
+        cmd, sub_cmd, *args = cmd_parts + ['']
 
         if cmd == '/chat':
             method_name = f"handle_{sub_cmd}"
@@ -502,35 +484,13 @@ class ChatApp:
                 session = self.provider_factory.create_provider('OpenAI', self.openai_api_key, self.openai_base_url, "gpt-4", self.history_manager)
 
             console.print(f"Chat session started. Type your messages and press Enter to send.", style="cyan")
-            console.print("Use Ctrl+Enter for new lines in multi-line messages.", style="cyan")
+            console.print("Use '...' at the end of a line to continue input on the next line.", style="cyan")
+            console.print("Use an empty line to finish your multi-line input.", style="cyan")
             session.display_history()
-
-            kb = KeyBindings()
-
-            @Condition
-            def is_multiline():
-                return '\n' in prompt_session.default_buffer.text
-
-            @kb.add('enter', filter=~is_multiline)
-            def _(event):
-                event.current_buffer.validate_and_handle()
-
-            @kb.add('enter', filter=is_multiline)
-            def _(event):
-                event.current_buffer.insert_text('\n')
-
-            @kb.add('c-j')  # Ctrl+Enter
-            def _(event):
-                event.current_buffer.validate_and_handle()
-
-            prompt_session = PromptSession(key_bindings=kb, multiline=True)
 
             while True:
                 try:
-                    with patch_stdout():
-                        user_input = await prompt_session.prompt_async("> ", multiline=True)
-
-                    user_input = user_input.rstrip()  # Remove trailing whitespace but keep newlines
+                    user_input = await self.get_multiline_input()
 
                     if user_input.lower() == '/exit':
                         console.print("Thank you for chatting. Goodbye!", style="cyan")
@@ -549,6 +509,30 @@ class ChatApp:
             console.print(f"\nAn unexpected error occurred: {e}", style="bold red")
         finally:
             session.save_history()  # Ensure history is saved when exiting
+
+    async def get_multiline_input(self) -> str:
+        lines = []
+        prompt_session = PromptSession()
+        
+        while True:
+            if not lines:
+                prompt = "> "
+            else:
+                prompt = "... "
+            
+            with patch_stdout():
+                line = await prompt_session.prompt_async(prompt, multiline=False)
+            
+            if not line and lines:  # Empty line finishes input if there's already content
+                break
+            elif line.endswith('...'):
+                lines.append(line[:-3])  # Remove the '...' and add to lines
+            else:
+                lines.append(line)
+                if not line.endswith('...'):
+                    break
+        
+        return '\n'.join(lines)
 
 async def main():
     app = ChatApp()
