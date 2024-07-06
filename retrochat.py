@@ -7,15 +7,13 @@ import base64
 import json
 import logging
 from dataclasses import dataclass, asdict
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from prompt_toolkit import PromptSession
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.patch_stdout import patch_stdout
-from typing import List, Dict, Any
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from rich.console import Console
 from rich.prompt import Prompt
 from dotenv import load_dotenv, set_key
@@ -25,6 +23,7 @@ USER_HOME = os.path.expanduser('~')
 RETROCHAT_DIR = os.path.join(USER_HOME, '.retrochat')
 ENV_FILE = os.path.join(RETROCHAT_DIR, '.env')
 DB_FILE = os.path.join(RETROCHAT_DIR, 'chat_history.db')
+SETTINGS_FILE = os.path.join(RETROCHAT_DIR, 'settings.json')
 ANTHROPIC_API_KEY_NAME = "ANTHROPIC_API_KEY"
 OPENAI_API_KEY_NAME = "OPENAI_API_KEY"
 LAST_CHAT_NAME_KEY = "LAST_CHAT_NAME"
@@ -42,14 +41,14 @@ class ChatMessage:
     def to_dict(self) -> dict:
         return {
             "role": self.role,
-            "content": self.content  # Remove base64 encoding
+            "content": self.content
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> 'ChatMessage':
         return cls(
             role=data["role"],
-            content=data["content"]  # Remove base64 decoding
+            content=data["content"]
         )
 
 class ChatHistoryManager:
@@ -193,14 +192,49 @@ class OllamaChatSession(ChatProvider):
         super().__init__(history_manager)
         self.model_url = model_url
         self.model = model
+        self.parameters = self.load_parameters()
+        self.default_parameters = {
+            "num_predict": 128,
+            "top_k": 40,
+            "top_p": 0.9,
+            "num_ctx": 2048,
+            "temperature": 0.8,
+            "repeat_penalty": 1.1,
+            "repeat_last_n": 64,
+            "stop": None,
+            "system": None
+        }
+
+    def load_parameters(self) -> Dict[str, Any]:
+        if os.path.exists(SETTINGS_FILE):
+            with open(SETTINGS_FILE, 'r') as f:
+                settings = json.load(f)
+                return settings.get('ollama_parameters', {})
+        return {}
+
+    def save_parameters(self):
+        settings = {}
+        if os.path.exists(SETTINGS_FILE):
+            with open(SETTINGS_FILE, 'r') as f:
+                settings = json.load(f)
+        
+        settings['ollama_parameters'] = self.parameters
+        
+        with open(SETTINGS_FILE, 'w') as f:
+            json.dump(settings, f, indent=2)
 
     async def send_message(self, message: str):
         self.add_to_history("user", message)
         data = {
             "model": self.model,
             "messages": [{"role": msg.role, "content": msg.content} for msg in self.chat_history],
-            "stream": True
+            "stream": True,
+            "options": {k: v for k, v in self.parameters.items() if v is not None}
         }
+        
+        if self.parameters.get("system") is not None:
+            data["system"] = self.parameters["system"]
+
         async with aiohttp.ClientSession() as session:
             async with session.post(self.model_url, json=data) as response:
                 if response.status == 200:
@@ -218,6 +252,39 @@ class OllamaChatSession(ChatProvider):
                     self.save_history()
                 else:
                     console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
+
+    def set_parameter(self, param: str, value: Any):
+        if param in self.default_parameters:
+            self.parameters[param] = value
+            console.print(f"Parameter '{param}' set to {value}", style="cyan")
+            self.save_parameters()
+        else:
+            console.print(f"Invalid parameter: {param}", style="bold red")
+
+    def show_parameters(self):
+        console.print("Available Parameters:", style="cyan")
+        for param, default_value in self.default_parameters.items():
+            current_value = self.parameters.get(param, default_value)
+            value_type = "int" if isinstance(default_value, int) else "float" if isinstance(default_value, float) else "string"
+            description = self.get_parameter_description(param)
+            if param == "stop":
+                console.print(f"/set {param} <string> <string> ... {description} (Current: {current_value})", style="green")
+            else:
+                console.print(f"/set {param} <{value_type}> {description} (Current: {current_value})", style="green")
+
+    def get_parameter_description(self, param: str) -> str:
+        descriptions = {
+            "num_predict": "Max number of tokens to predict",
+            "top_k": "Pick from top k num of tokens",
+            "top_p": "Pick token based on sum of probabilities",
+            "num_ctx": "Set the context size",
+            "temperature": "Set creativity level",
+            "repeat_penalty": "How strongly to penalize repetitions",
+            "repeat_last_n": "Set how far back to look for repetitions",
+            "stop": "Set the stop parameters",
+            "system": "Set the system message"
+        }
+        return descriptions.get(param, "")
 
 class AnthropicChatSession(ChatProvider):
     def __init__(self, api_key: str, model_url: str, history_manager: ChatHistoryManager):
@@ -315,21 +382,45 @@ class CommandHandler:
 
     async def handle_command(self, command: str, session: ChatProvider):
         cmd_parts = command.split(maxsplit=2)
-        if len(cmd_parts) < 2:
-            self.display_help()
-            return
-
-        cmd, sub_cmd, *args = cmd_parts + ['']
+        cmd, *args = cmd_parts + ['', '']
 
         if cmd == '/chat':
-            method_name = f"handle_{sub_cmd}"
+            method_name = f"handle_{args[0]}"
             method = getattr(self, method_name, None)
             if method:
-                await method(args[0], session)
+                await method(args[1], session)
             else:
                 self.display_help()
-        else:
+        elif cmd == '/set':
+            if isinstance(session, OllamaChatSession):
+                if not args[0]:
+                    session.show_parameters()
+                else:
+                    self.handle_set(args[0], args[1], session)
+            else:
+                console.print("The /set command is only available for Ollama sessions.", style="bold red")
+        elif cmd == '/help':
             self.display_help()
+        else:
+            console.print("Unknown command. Type /help for available commands.", style="bold red")
+
+    def handle_set(self, param: str, value: str, session: OllamaChatSession):
+        try:
+            if param in ["num_predict", "top_k", "num_ctx", "repeat_last_n"]:
+                value = int(value)
+            elif param in ["top_p", "temperature", "repeat_penalty"]:
+                value = float(value)
+            elif param == "stop":
+                value = value.split()  # Split into a list
+            elif param == "system":
+                value = value  # Keep as string
+            else:
+                console.print(f"Invalid parameter: {param}", style="bold red")
+                return
+            
+            session.set_parameter(param, value)
+        except ValueError:
+            console.print(f"Invalid value for parameter {param}: {value}", style="bold red")
 
     async def handle_rename(self, new_name: str, session: ChatProvider):
         if new_name:
@@ -390,6 +481,8 @@ class CommandHandler:
         console.print("/chat reset - Reset the current chat history", style="green")
         console.print("/chat list - List all available chats", style="green")
         console.print("/chat open <chat_name> - Open a specific chat", style="green")
+        console.print("/set - Show available parameters and their current values (Ollama only)", style="green")
+        console.print("/set <parameter> <value> - Set a parameter (Ollama only)", style="green")
         console.print("/help - Display this help message", style="green")
         console.print("/exit - Exit the program", style="green")
 
