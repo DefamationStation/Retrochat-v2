@@ -192,48 +192,33 @@ class OllamaChatSession(ChatProvider):
         super().__init__(history_manager)
         self.model_url = model_url
         self.model = model
-        self.parameters = self.load_parameters()
+        self.parameters = {}
+        self.system_message = None
         self.default_parameters = {
             "num_predict": 128,
             "top_k": 40,
             "top_p": 0.9,
-            "num_ctx": 2048,
             "temperature": 0.8,
             "repeat_penalty": 1.1,
             "repeat_last_n": 64,
+            "num_ctx": 2048,
             "stop": None,
-            "system": None
         }
-
-    def load_parameters(self) -> Dict[str, Any]:
-        if os.path.exists(SETTINGS_FILE):
-            with open(SETTINGS_FILE, 'r') as f:
-                settings = json.load(f)
-                return settings.get('ollama_parameters', {})
-        return {}
-
-    def save_parameters(self):
-        settings = {}
-        if os.path.exists(SETTINGS_FILE):
-            with open(SETTINGS_FILE, 'r') as f:
-                settings = json.load(f)
-        
-        settings['ollama_parameters'] = self.parameters
-        
-        with open(SETTINGS_FILE, 'w') as f:
-            json.dump(settings, f, indent=2)
 
     async def send_message(self, message: str):
         self.add_to_history("user", message)
+        messages = [{"role": msg.role, "content": msg.content} for msg in self.chat_history]
+        
+        # Add system message if it exists
+        if self.system_message:
+            messages.insert(0, {"role": "system", "content": self.system_message})
+        
         data = {
             "model": self.model,
-            "messages": [{"role": msg.role, "content": msg.content} for msg in self.chat_history],
+            "messages": messages,
             "stream": True,
             "options": {k: v for k, v in self.parameters.items() if v is not None}
         }
-        
-        if self.parameters.get("system") is not None:
-            data["system"] = self.parameters["system"]
 
         async with aiohttp.ClientSession() as session:
             async with session.post(self.model_url, json=data) as response:
@@ -254,35 +239,40 @@ class OllamaChatSession(ChatProvider):
                     console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
 
     def set_parameter(self, param: str, value: Any):
-        if param in self.default_parameters:
+        if param == "system":
+            self.system_message = value
+            console.print(f"System message set to: {value}", style="cyan")
+        elif param in self.default_parameters:
+            if param in ["num_predict", "top_k", "repeat_last_n", "num_ctx"]:
+                value = int(value)
+            elif param in ["top_p", "temperature", "repeat_penalty"]:
+                value = float(value)
+            elif param == "stop":
+                value = value.split()  # Split into a list
             self.parameters[param] = value
             console.print(f"Parameter '{param}' set to {value}", style="cyan")
-            self.save_parameters()
         else:
             console.print(f"Invalid parameter: {param}", style="bold red")
 
     def show_parameters(self):
-        console.print("Available Parameters:", style="cyan")
+        console.print("Current Parameters:", style="cyan")
         for param, default_value in self.default_parameters.items():
             current_value = self.parameters.get(param, default_value)
-            value_type = "int" if isinstance(default_value, int) else "float" if isinstance(default_value, float) else "string"
-            description = self.get_parameter_description(param)
-            if param == "stop":
-                console.print(f"/set {param} <string> <string> ... {description} (Current: {current_value})", style="green")
-            else:
-                console.print(f"/set {param} <{value_type}> {description} (Current: {current_value})", style="green")
+            if param == "system":
+                current_value = self.system_message if self.system_message else "Not set"
+            console.print(f"{param}: {current_value}", style="green")
 
     def get_parameter_description(self, param: str) -> str:
         descriptions = {
             "num_predict": "Max number of tokens to predict",
             "top_k": "Pick from top k num of tokens",
-            "top_p": "Pick token based on sum of probabilities",
-            "num_ctx": "Set the context size",
-            "temperature": "Set creativity level",
-            "repeat_penalty": "How strongly to penalize repetitions",
-            "repeat_last_n": "Set how far back to look for repetitions",
-            "stop": "Set the stop parameters",
-            "system": "Set the system message"
+            "top_p": "Nucleus sampling probability threshold",
+            "temperature": "Temperature for sampling",
+            "repeat_penalty": "Repetition penalty for sampling",
+            "repeat_last_n": "Last n tokens to consider for repetition penalty",
+            "num_ctx": "Context window size",
+            "stop": "Stop sequences for text generation",
+            "system": "System message for chat",
         }
         return descriptions.get(param, "")
 
@@ -405,22 +395,10 @@ class CommandHandler:
             console.print("Unknown command. Type /help for available commands.", style="bold red")
 
     def handle_set(self, param: str, value: str, session: OllamaChatSession):
-        try:
-            if param in ["num_predict", "top_k", "num_ctx", "repeat_last_n"]:
-                value = int(value)
-            elif param in ["top_p", "temperature", "repeat_penalty"]:
-                value = float(value)
-            elif param == "stop":
-                value = value.split()  # Split into a list
-            elif param == "system":
-                value = value  # Keep as string
-            else:
-                console.print(f"Invalid parameter: {param}", style="bold red")
-                return
-            
+        if not param:
+            session.show_parameters()
+        else:
             session.set_parameter(param, value)
-        except ValueError:
-            console.print(f"Invalid value for parameter {param}: {value}", style="bold red")
 
     async def handle_rename(self, new_name: str, session: ChatProvider):
         if new_name:
