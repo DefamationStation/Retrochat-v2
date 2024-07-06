@@ -154,6 +154,7 @@ class ChatProvider(ABC):
     def __init__(self, history_manager: ChatHistoryManager):
         self.history_manager = history_manager
         self.chat_history = self.load_history()
+        self.system_message = None
 
     def load_history(self) -> List[ChatMessage]:
         try:
@@ -187,13 +188,15 @@ class ChatProvider(ABC):
                 else:
                     console.print(entry.content, style="yellow")
 
+    def set_system_message(self, message: str):
+        self.system_message = message
+
 class OllamaChatSession(ChatProvider):
     def __init__(self, model_url: str, model: str, history_manager: ChatHistoryManager):
         super().__init__(history_manager)
         self.model_url = model_url
         self.model = model
         self.parameters = {}
-        self.system_message = None
         self.default_parameters = {
             "num_predict": 128,
             "top_k": 40,
@@ -239,10 +242,7 @@ class OllamaChatSession(ChatProvider):
                     console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
 
     def set_parameter(self, param: str, value: Any):
-        if param == "system":
-            self.system_message = value
-            console.print(f"System message set to: {value}", style="cyan")
-        elif param in self.default_parameters:
+        if param in self.default_parameters:
             if param in ["num_predict", "top_k", "repeat_last_n", "num_ctx"]:
                 value = int(value)
             elif param in ["top_p", "temperature", "repeat_penalty"]:
@@ -258,9 +258,8 @@ class OllamaChatSession(ChatProvider):
         console.print("Current Parameters:", style="cyan")
         for param, default_value in self.default_parameters.items():
             current_value = self.parameters.get(param, default_value)
-            if param == "system":
-                current_value = self.system_message if self.system_message else "Not set"
             console.print(f"{param}: {current_value}", style="green")
+        console.print(f"system: {self.system_message if self.system_message else 'Not set'}", style="green")
 
     def get_parameter_description(self, param: str) -> str:
         descriptions = {
@@ -284,12 +283,17 @@ class AnthropicChatSession(ChatProvider):
 
     async def send_message(self, message: str):
         self.add_to_history("user", message)
+        messages = [{"role": msg.role, "content": msg.content} for msg in self.chat_history]
+        
+        # Add system message if it exists
+        if self.system_message:
+            messages.insert(0, {"role": "system", "content": self.system_message})
+        
         data = {
             "model": "claude-3-5-sonnet-20240620",
             "max_tokens": 4096,
             "temperature": 0.0,
-            "system": "Keep your answers short and to the point.",
-            "messages": [{"role": msg.role, "content": msg.content} for msg in self.chat_history]
+            "messages": messages
         }
         headers = {
             "Content-Type": "application/json",
@@ -319,9 +323,15 @@ class OpenAIChatSession(ChatProvider):
 
     async def send_message(self, message: str):
         self.add_to_history("user", message)
+        messages = [{"role": msg.role, "content": msg.content} for msg in self.chat_history]
+        
+        # Add system message if it exists
+        if self.system_message:
+            messages.insert(0, {"role": "system", "content": self.system_message})
+        
         data = {
             "model": self.model,
-            "messages": [{"role": msg.role, "content": msg.content} for msg in self.chat_history],
+            "messages": messages,
             "stream": True
         }
         headers = {
@@ -367,8 +377,9 @@ class ChatProviderFactory:
         raise ValueError(f"Unsupported provider type: {provider_type}")
 
 class CommandHandler:
-    def __init__(self, history_manager: ChatHistoryManager):
+    def __init__(self, history_manager: ChatHistoryManager, chat_app):
         self.history_manager = history_manager
+        self.chat_app = chat_app
 
     async def handle_command(self, command: str, session: ChatProvider):
         cmd_parts = command.split(maxsplit=2)
@@ -382,13 +393,15 @@ class CommandHandler:
             else:
                 self.display_help()
         elif cmd == '/set':
-            if isinstance(session, OllamaChatSession):
+            if args[0] == 'system':
+                self.handle_set_system(args[1])
+            elif isinstance(session, OllamaChatSession):
                 if not args[0]:
                     session.show_parameters()
                 else:
                     self.handle_set(args[0], args[1], session)
             else:
-                console.print("The /set command is only available for Ollama sessions.", style="bold red")
+                console.print("The /set command is only available for Ollama sessions, except for /set system.", style="bold red")
         elif cmd == '/help':
             self.display_help()
         else:
@@ -400,11 +413,15 @@ class CommandHandler:
         else:
             session.set_parameter(param, value)
 
+    def handle_set_system(self, message: str):
+        self.chat_app.set_global_system_message(message)
+        console.print(f"Global system message set to: {message}", style="cyan")
+
     async def handle_rename(self, new_name: str, session: ChatProvider):
         if new_name:
             self.history_manager.rename_history(new_name)
             console.print(f"Chat renamed to '{new_name}'", style="cyan")
-            self.save_last_chat_name(new_name)
+            self.chat_app.save_last_chat_name(new_name)
         else:
             console.print("Please provide a new name for the chat. Usage: /chat rename <new_name>", style="bold red")
 
@@ -417,7 +434,7 @@ class CommandHandler:
             self.history_manager.set_chat_name(new_name)
             self.history_manager.save_history([])
             console.print(f"New chat '{new_name}' created.", style="cyan")
-            self.save_last_chat_name(new_name)
+            self.chat_app.save_last_chat_name(new_name)
         else:
             console.print("Please provide a name for the new chat. Usage: /chat new <chat_name>", style="bold red")
 
@@ -442,14 +459,11 @@ class CommandHandler:
                 session.chat_history = self.history_manager.load_history()
                 console.print(f"Chat '{chat_name}' opened.", style="cyan")
                 session.display_history()
-                self.save_last_chat_name(chat_name)
+                self.chat_app.save_last_chat_name(chat_name)
             else:
                 console.print(f"Chat '{chat_name}' does not exist.", style="bold red")
         else:
             console.print("Please provide the name of the chat to open. Usage: /chat open <chat_name>", style="bold red")
-
-    def save_last_chat_name(self, chat_name: str):
-        set_key(ENV_FILE, LAST_CHAT_NAME_KEY, chat_name)
 
     def display_help(self):
         console.print("Available commands:", style="cyan")
@@ -459,6 +473,7 @@ class CommandHandler:
         console.print("/chat reset - Reset the current chat history", style="green")
         console.print("/chat list - List all available chats", style="green")
         console.print("/chat open <chat_name> - Open a specific chat", style="green")
+        console.print("/set system <message> - Set the global system message", style="green")
         console.print("/set - Show available parameters and their current values (Ollama only)", style="green")
         console.print("/set <parameter> <value> - Set a parameter (Ollama only)", style="green")
         console.print("/help - Display this help message", style="green")
@@ -471,10 +486,11 @@ class ChatApp:
         self.openai_base_url = "https://api.openai.com/v1/chat/completions"
         self.chat_name = 'default'
         self.history_manager = ChatHistoryManager(DB_FILE)
-        self.command_handler = CommandHandler(self.history_manager)
+        self.command_handler = CommandHandler(self.history_manager, self)
         self.provider_factory = ChatProviderFactory()
         self.openai_api_key = None
         self.anthropic_api_key = None
+        self.global_system_message = None
 
         self.load_env_variables()
         self.save_last_chat_name(self.chat_name)
@@ -524,6 +540,9 @@ class ChatApp:
     def save_last_chat_name(self, chat_name: str):
         set_key(ENV_FILE, LAST_CHAT_NAME_KEY, chat_name)
 
+    def set_global_system_message(self, message: str):
+        self.global_system_message = message
+
     async def start(self):
         try:
             console.clear()
@@ -546,6 +565,7 @@ class ChatApp:
                     return
                 session = self.provider_factory.create_provider('OpenAI', self.openai_api_key, self.openai_base_url, "gpt-4", self.history_manager)
 
+            session.set_system_message(self.global_system_message)
             session.display_history()
 
             while True:
