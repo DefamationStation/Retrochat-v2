@@ -528,7 +528,7 @@ class ChatApp:
                         model_names = [model['name'] for model in models_info['models']]
                         console.print("Available Ollama models:", style="cyan")
                         for idx, model in enumerate(model_names):
-                            console.print(f"{idx + 1}. {model}", style="cyan")
+                            console.print(f"{idx + 1}. {model}", style="green")
                         choice = Prompt.ask("Select a model number", choices=[str(i) for i in range(1, len(model_names) + 1)])
                         return model_names[int(choice) - 1]
                     else:
