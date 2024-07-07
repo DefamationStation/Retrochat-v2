@@ -200,11 +200,11 @@ class OllamaChatSession(ChatProvider):
         self.default_parameters = {
             "num_predict": 128,
             "top_k": 40,
-            "top_p": 0.9,
+            "top_p": 0.95,
             "temperature": 0.8,
-            "repeat_penalty": 1.1,
+            "repeat_penalty": 0.95,
             "repeat_last_n": 64,
-            "num_ctx": 2048,
+            "num_ctx": 8192,
             "stop": None,
         }
 
