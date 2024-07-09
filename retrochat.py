@@ -567,7 +567,7 @@ class CommandHandler:
 
 class ChatApp:
     def __init__(self):
-        self.model_url_ollama = "http://localhost/api/chat"
+        self.model_url_ollama = "http://localhost:11434/api/chat"
         self.model_url_anthropic = "https://api.anthropic.com/v1/messages"
         self.openai_base_url = "https://api.openai.com/v1/chat/completions"
         self.chat_name = 'default'
@@ -605,7 +605,7 @@ class ChatApp:
         return True
 
     async def select_ollama_model(self) -> str:
-        url = "http://192.168.1.82:11434/api/tags"
+        url = "http://localhost:11434/api/tags"
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as response:
                 if response.status == 200:
