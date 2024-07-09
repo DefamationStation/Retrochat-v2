@@ -36,6 +36,63 @@ os.makedirs(RETROCHAT_DIR, exist_ok=True)
 # Initialize rich console
 console = Console()
 
+# Self-setup functionality
+def setup_rchat():
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    rchat_bat_path = os.path.join(RETROCHAT_DIR, "rchat.bat")
+    
+    if not os.path.exists(rchat_bat_path):
+        with open(rchat_bat_path, "w") as f:
+            f.write(f'@echo off\npython "{os.path.join(script_dir, "retrochat.py")}" %*')
+        console.print(f"Created rchat.bat at {rchat_bat_path}", style="cyan")
+    
+    # Add RETROCHAT_DIR to PATH
+    if sys.platform.startswith('win'):
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_ALL_ACCESS)
+        try:
+            path, _ = winreg.QueryValueEx(key, "Path")
+            if RETROCHAT_DIR not in path:
+                new_path = f"{path};{RETROCHAT_DIR}"
+                winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, new_path)
+                console.print(f"Added {RETROCHAT_DIR} to PATH.", style="cyan")
+            else:
+                console.print(f"{RETROCHAT_DIR} is already in PATH.", style="cyan")
+        except WindowsError:
+            winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, RETROCHAT_DIR)
+            console.print(f"Created PATH and added {RETROCHAT_DIR}.", style="cyan")
+        finally:
+            winreg.CloseKey(key)
+    else:
+        # For Unix-like systems
+        shell = os.environ.get("SHELL", "").split("/")[-1]
+        rc_file = f".{shell}rc"
+        rc_path = os.path.join(USER_HOME, rc_file)
+        
+        with open(rc_path, "a") as f:
+            f.write(f'\nexport PATH="$PATH:{RETROCHAT_DIR}"')
+        
+        console.print(f"Added {RETROCHAT_DIR} to PATH in {rc_path}", style="cyan")
+        console.print(f"Please run 'source ~/{rc_file}' or restart your terminal for the changes to take effect.", style="cyan")
+
+    console.print("Setup complete. You can now use the 'rchat' command from anywhere.", style="green")
+
+def check_and_setup():
+    rchat_bat_path = os.path.join(RETROCHAT_DIR, "rchat.bat")
+    if not os.path.exists(rchat_bat_path):
+        console.print("RetroChat Setup", style="bold cyan")
+        console.print("This setup will do the following:", style="cyan")
+        console.print("1. Create an 'rchat.bat' file in the '.retrochat' folder", style="cyan")
+        console.print("2. Add the '.retrochat' folder to your system PATH", style="cyan")
+        console.print("\nThis will allow you to run RetroChat from anywhere using the 'rchat' command.", style="cyan")
+        
+        response = Prompt.ask("Do you want to proceed with the setup?", choices=["yes", "no"])
+        if response.lower() == "yes":
+            setup_rchat()
+        else:
+            console.print("Setup cancelled. You can run the setup later by using the --setup flag.", style="yellow")
+
+
 @dataclass
 class ChatMessage:
     role: str
@@ -625,7 +682,12 @@ class ChatApp:
         try:
             console.clear()
             console.print("Welcome to Retrochat!", style="bold green")
+            
+            # Check for setup
+            check_and_setup()
+            
             console.print("Select the mode:\n1. Ollama\n2. Anthropic\n3. OpenAI", style="cyan")
+
 
             mode = Prompt.ask("Enter your choice", choices=["1", "2", "3"])
 
@@ -693,8 +755,11 @@ class ChatApp:
         return '\n'.join(lines)
 
 async def main():
-    app = ChatApp()
-    await app.start()
+    if len(sys.argv) > 1 and sys.argv[1] == "--setup":
+        setup_rchat()
+    else:
+        app = ChatApp()
+        await app.start()
 
 if __name__ == "__main__":
     asyncio.run(main())
