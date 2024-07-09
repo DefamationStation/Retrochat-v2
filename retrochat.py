@@ -1,4 +1,5 @@
 import os
+import platform
 import sys
 import asyncio
 import aiohttp
@@ -6,6 +7,8 @@ import sqlite3
 import base64
 import json
 import logging
+import tempfile
+import subprocess
 from dataclasses import dataclass, asdict
 from typing import List, Optional, Dict, Any
 from prompt_toolkit import PromptSession
@@ -192,13 +195,9 @@ class ChatProvider(ABC):
         self.system_message = message
 
     def format_message(self, message: str) -> str:
-        # Strip leading and trailing whitespace
         message = message.strip()
-        # Split into paragraphs
         paragraphs = message.split('\n\n')
-        # Remove any empty paragraphs
         paragraphs = [p.strip() for p in paragraphs if p.strip()]
-        # Join paragraphs with a consistent number of newlines (e.g., two)
         formatted_message = '\n\n'.join(paragraphs)
         return formatted_message
 
@@ -223,7 +222,6 @@ class OllamaChatSession(ChatProvider):
         self.add_to_history("user", message)
         messages = [{"role": msg.role, "content": msg.content} for msg in self.chat_history]
         
-        # Add system message if it exists
         if self.system_message:
             messages.insert(0, {"role": "system", "content": self.system_message})
         
@@ -250,8 +248,10 @@ class OllamaChatSession(ChatProvider):
                     formatted_message = self.format_message(complete_message)
                     self.add_to_history("assistant", formatted_message)
                     self.save_history()
+                    return formatted_message
                 else:
                     console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
+                    return None
 
     def set_parameter(self, param: str, value: Any):
         if param in self.default_parameters:
@@ -297,7 +297,6 @@ class AnthropicChatSession(ChatProvider):
         self.add_to_history("user", message)
         messages = [{"role": msg.role, "content": msg.content} for msg in self.chat_history]
         
-        # Add system message if it exists
         if self.system_message:
             messages.insert(0, {"role": "system", "content": self.system_message})
         
@@ -322,10 +321,12 @@ class AnthropicChatSession(ChatProvider):
                         self.add_to_history("assistant", formatted_message)
                         self.save_history()
                         console.print(formatted_message, style="yellow")
+                        return formatted_message
                     else:
                         console.print("No response content received.", style="bold red")
                 else:
                     console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
+                return None
 
 class OpenAIChatSession(ChatProvider):
     def __init__(self, api_key: str, base_url: str, model: str, history_manager: ChatHistoryManager):
@@ -334,55 +335,49 @@ class OpenAIChatSession(ChatProvider):
         self.base_url = base_url
         self.model = model
 
-    class OpenAIChatSession(ChatProvider):
-        def __init__(self, api_key: str, base_url: str, model: str, history_manager: ChatHistoryManager):
-            super().__init__(history_manager)
-            self.api_key = api_key
-            self.base_url = base_url
-            self.model = model
-
-        async def send_message(self, message: str):
-            self.add_to_history("user", message)
-            messages = [{"role": msg.role, "content": msg.content} for msg in self.chat_history]
-            
-            # Add system message if it exists
-            if self.system_message:
-                messages.insert(0, {"role": "system", "content": self.system_message})
-            
-            data = {
-                "model": self.model,
-                "messages": messages,
-                "stream": True
-            }
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}"
-            }
-            async with aiohttp.ClientSession() as session:
-                async with session.post(self.base_url, headers=headers, json=data) as response:
-                    if response.status == 200:
-                        complete_message = ""
-                        async for line in response.content:
-                            if line:
-                                line = line.decode('utf-8').strip()
-                                if line.startswith("data: "):
-                                    if line == "data: [DONE]":
-                                        break
-                                    json_str = line[6:]
-                                    try:
-                                        response_json = json.loads(json_str)
-                                        content = response_json['choices'][0]['delta'].get('content', '')
-                                        if content:
-                                            complete_message += content
-                                            console.print(content, end="", style="yellow")
-                                    except json.JSONDecodeError:
-                                        continue
-                        console.print()
-                        formatted_message = self.format_message(complete_message)
-                        self.add_to_history("assistant", formatted_message)
-                        self.save_history()
-                    else:
-                        console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
+    async def send_message(self, message: str):
+        self.add_to_history("user", message)
+        messages = [{"role": msg.role, "content": msg.content} for msg in self.chat_history]
+        
+        if self.system_message:
+            messages.insert(0, {"role": "system", "content": self.system_message})
+        
+        data = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}"
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(self.base_url, headers=headers, json=data) as response:
+                if response.status == 200:
+                    complete_message = ""
+                    async for line in response.content:
+                        if line:
+                            line = line.decode('utf-8').strip()
+                            if line.startswith("data: "):
+                                if line == "data: [DONE]":
+                                    break
+                                json_str = line[6:]
+                                try:
+                                    response_json = json.loads(json_str)
+                                    content = response_json['choices'][0]['delta'].get('content', '')
+                                    if content:
+                                        complete_message += content
+                                        console.print(content, end="", style="yellow")
+                                except json.JSONDecodeError:
+                                    continue
+                    console.print()
+                    formatted_message = self.format_message(complete_message)
+                    self.add_to_history("assistant", formatted_message)
+                    self.save_history()
+                    return formatted_message
+                else:
+                    console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
+                    return None
 
 class ChatProviderFactory:
     @staticmethod
@@ -423,6 +418,8 @@ class CommandHandler:
                     self.handle_set(args[0], args[1], session)
             else:
                 console.print("The /set command is only available for Ollama sessions, except for /set system.", style="bold red")
+        elif cmd == '/edit':
+            await self.chat_app.edit_conversation(session)
         elif cmd == '/help':
             self.display_help()
         else:
@@ -497,6 +494,7 @@ class CommandHandler:
         console.print("/set system <message> - Set the global system message", style="green")
         console.print("/set - Show available parameters and their current values (Ollama only)", style="green")
         console.print("/set <parameter> <value> - Set a parameter (Ollama only)", style="green")
+        console.print("/edit - Edit the entire conversation", style="green")
         console.print("/help - Display this help message", style="green")
         console.print("/exit - Exit the program", style="green")
 
@@ -563,6 +561,65 @@ class ChatApp:
 
     def set_global_system_message(self, message: str):
         self.global_system_message = message
+
+    async def edit_conversation(self, session: ChatProvider):
+        # Convert chat history to a string
+        chat_text = ""
+        for msg in session.chat_history:
+            chat_text += f"{msg.role.upper()}:\n{msg.content}\n\n"
+
+        # Create a temporary file with the chat history
+        with tempfile.NamedTemporaryFile(mode='w+', suffix='.txt', delete=False) as temp_file:
+            temp_file.write(chat_text)
+            temp_file_path = temp_file.name
+
+        # Determine the appropriate editor command
+        if platform.system() == 'Windows':
+            editor_cmd = ['notepad.exe', temp_file_path]
+        else:
+            editor = os.environ.get('EDITOR', 'nano')
+            editor_cmd = [editor, temp_file_path]
+
+        # Open the text editor
+        try:
+            subprocess.run(editor_cmd, check=True)
+        except subprocess.CalledProcessError:
+            console.print(f"Error: Unable to open the default editor.", style="bold red")
+            console.print("You can manually edit the file at:", style="cyan")
+            console.print(temp_file_path, style="yellow")
+            console.print("After editing, press Enter to continue.", style="cyan")
+            input()
+
+        # Read the edited content
+        with open(temp_file_path, 'r') as file:
+            edited_content = file.read()
+
+        # Remove the temporary file
+        os.unlink(temp_file_path)
+
+        # Parse the edited content back into chat history
+        new_history = []
+        current_role = None
+        current_content = []
+
+        for line in edited_content.split('\n'):
+            line = line.strip()
+            if line.upper() in ['USER:', 'ASSISTANT:']:
+                if current_role is not None:
+                    new_history.append(ChatMessage(role=current_role, content='\n'.join(current_content).strip()))
+                current_role = line[:-1].lower()
+                current_content = []
+            elif line:
+                current_content.append(line)
+
+        if current_role is not None:
+            new_history.append(ChatMessage(role=current_role, content='\n'.join(current_content).strip()))
+
+        # Update the session's chat history
+        session.chat_history = new_history
+        session.save_history()
+        console.print("Chat history updated successfully.", style="cyan")
+        session.display_history()
 
     async def start(self):
         try:
