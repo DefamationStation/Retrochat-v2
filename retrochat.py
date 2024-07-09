@@ -20,6 +20,7 @@ from abc import ABC, abstractmethod
 from rich.console import Console
 from rich.prompt import Prompt
 from dotenv import load_dotenv, set_key
+import shutil
 
 # Constants
 USER_HOME = os.path.expanduser('~')
@@ -30,6 +31,7 @@ SETTINGS_FILE = os.path.join(RETROCHAT_DIR, 'settings.json')
 ANTHROPIC_API_KEY_NAME = "ANTHROPIC_API_KEY"
 OPENAI_API_KEY_NAME = "OPENAI_API_KEY"
 LAST_CHAT_NAME_KEY = "LAST_CHAT_NAME"
+RETROCHAT_SCRIPT = os.path.join(RETROCHAT_DIR, 'retrochat.py')
 
 os.makedirs(RETROCHAT_DIR, exist_ok=True)
 
@@ -38,12 +40,18 @@ console = Console()
 
 # Self-setup functionality
 def setup_rchat():
-    script_dir = os.path.dirname(os.path.abspath(__file__))
+    os.makedirs(RETROCHAT_DIR, exist_ok=True)
+    
+    # Copy the current script to RETROCHAT_DIR
+    current_script = sys.argv[0]
+    shutil.copy2(current_script, RETROCHAT_SCRIPT)
+    console.print(f"Copied RetroChat script to {RETROCHAT_SCRIPT}", style="cyan")
+    
     rchat_bat_path = os.path.join(RETROCHAT_DIR, "rchat.bat")
     
     if not os.path.exists(rchat_bat_path):
         with open(rchat_bat_path, "w") as f:
-            f.write(f'@echo off\npython "{os.path.join(script_dir, "retrochat.py")}" %*')
+            f.write(f'@echo off\npython "{RETROCHAT_SCRIPT}" %*')
         console.print(f"Created rchat.bat at {rchat_bat_path}", style="cyan")
     
     # Add RETROCHAT_DIR to PATH
@@ -79,11 +87,13 @@ def setup_rchat():
 
 def check_and_setup():
     rchat_bat_path = os.path.join(RETROCHAT_DIR, "rchat.bat")
-    if not os.path.exists(rchat_bat_path):
+    if not os.path.exists(rchat_bat_path) or not os.path.exists(RETROCHAT_SCRIPT):
         console.print("RetroChat Setup", style="bold cyan")
         console.print("This setup will do the following:", style="cyan")
-        console.print("1. Create an 'rchat.bat' file in the '.retrochat' folder", style="cyan")
-        console.print("2. Add the '.retrochat' folder to your system PATH", style="cyan")
+        console.print("1. Create a '.retrochat' folder in your home directory", style="cyan")
+        console.print("2. Copy the RetroChat script to the '.retrochat' folder", style="cyan")
+        console.print("3. Create an 'rchat.bat' file in the '.retrochat' folder", style="cyan")
+        console.print("4. Add the '.retrochat' folder to your system PATH", style="cyan")
         console.print("\nThis will allow you to run RetroChat from anywhere using the 'rchat' command.", style="cyan")
         
         response = Prompt.ask("Do you want to proceed with the setup?", choices=["yes", "no"])
