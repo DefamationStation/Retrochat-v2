@@ -5,10 +5,11 @@ import aiohttp
 import sqlite3
 import json
 import requests
+import threading
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QTextEdit, QLineEdit, QPushButton, QComboBox, QLabel, QMessageBox,
                              QInputDialog, QDialog, QFormLayout, QDialogButtonBox)
-from PyQt6.QtCore import Qt, QObject, pyqtSignal, QThread
+from PyQt6.QtCore import Qt, QObject, pyqtSignal, QThread, pyqtSlot
 from PyQt6.QtGui import QTextCursor
 from dotenv import load_dotenv, set_key
 
@@ -43,12 +44,17 @@ class ChatHistoryManager:
     def __init__(self, db_file: str, chat_name: str = 'default'):
         self.db_file = db_file
         self.chat_name = chat_name
-        self.conn = sqlite3.connect(self.db_file)
+        self.local = threading.local()
         self._create_tables()
 
+    def _get_connection(self):
+        if not hasattr(self.local, 'conn'):
+            self.local.conn = sqlite3.connect(self.db_file)
+        return self.local.conn
+
     def _create_tables(self):
-        with self.conn:
-            self.conn.executescript('''
+        with self._get_connection() as conn:
+            conn.executescript('''
                 CREATE TABLE IF NOT EXISTS chat_sessions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     chat_name TEXT NOT NULL UNIQUE,
@@ -65,53 +71,56 @@ class ChatHistoryManager:
             ''')
 
     def _get_session_id(self, chat_name: str) -> int:
-        cursor = self.conn.cursor()
-        cursor.execute('SELECT id FROM chat_sessions WHERE chat_name = ?', (chat_name,))
-        session = cursor.fetchone()
-        if session:
-            return session[0]
-        cursor.execute('INSERT INTO chat_sessions (chat_name) VALUES (?)', (chat_name,))
-        return cursor.lastrowid
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT id FROM chat_sessions WHERE chat_name = ?', (chat_name,))
+            session = cursor.fetchone()
+            if session:
+                return session[0]
+            cursor.execute('INSERT INTO chat_sessions (chat_name) VALUES (?)', (chat_name,))
+            return cursor.lastrowid
 
     def set_chat_name(self, chat_name: str):
         self.chat_name = chat_name
 
     def save_history(self, history: list):
         session_id = self._get_session_id(self.chat_name)
-        with self.conn:
-            self.conn.execute('DELETE FROM chat_messages WHERE session_id = ?', (session_id,))
-            self.conn.executemany('''
+        with self._get_connection() as conn:
+            conn.execute('DELETE FROM chat_messages WHERE session_id = ?', (session_id,))
+            conn.executemany('''
                 INSERT INTO chat_messages (session_id, role, content) VALUES (?, ?, ?)
             ''', [(session_id, msg.role, msg.content) for msg in history])
 
     def load_history(self) -> list:
         session_id = self._get_session_id(self.chat_name)
-        cursor = self.conn.cursor()
-        cursor.execute('SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY timestamp', (session_id,))
-        return [ChatMessage(role=row[0], content=row[1]) for row in cursor.fetchall()]
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY timestamp', (session_id,))
+            return [ChatMessage(role=row[0], content=row[1]) for row in cursor.fetchall()]
 
     def clear_history(self):
         session_id = self._get_session_id(self.chat_name)
-        with self.conn:
-            self.conn.execute('DELETE FROM chat_messages WHERE session_id = ?', (session_id,))
+        with self._get_connection() as conn:
+            conn.execute('DELETE FROM chat_messages WHERE session_id = ?', (session_id,))
 
     def rename_history(self, new_name: str):
         session_id = self._get_session_id(self.chat_name)
-        with self.conn:
-            self.conn.execute('UPDATE chat_sessions SET chat_name = ? WHERE id = ?', (new_name, session_id))
+        with self._get_connection() as conn:
+            conn.execute('UPDATE chat_sessions SET chat_name = ? WHERE id = ?', (new_name, session_id))
         self.set_chat_name(new_name)
 
     def delete_history(self):
         session_id = self._get_session_id(self.chat_name)
-        with self.conn:
-            self.conn.execute('DELETE FROM chat_messages WHERE session_id = ?', (session_id,))
-            self.conn.execute('DELETE FROM chat_sessions WHERE id = ?', (session_id,))
+        with self._get_connection() as conn:
+            conn.execute('DELETE FROM chat_messages WHERE session_id = ?', (session_id,))
+            conn.execute('DELETE FROM chat_sessions WHERE id = ?', (session_id,))
         self.set_chat_name('default')
 
     def list_chats(self) -> list:
-        cursor = self.conn.cursor()
-        cursor.execute('SELECT chat_name FROM chat_sessions')
-        return [row[0] for row in cursor.fetchall()]
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT chat_name FROM chat_sessions')
+            return [row[0] for row in cursor.fetchall()]
 
 class ChatProvider:
     def __init__(self, history_manager: ChatHistoryManager):
@@ -306,6 +315,7 @@ class ChatProviderFactory:
 class ResponseWorker(QObject):
     finished = pyqtSignal()
     progress = pyqtSignal(str)
+    db_operation = pyqtSignal(object, str, str)
 
     def __init__(self, chat_session, message):
         super().__init__()
@@ -313,8 +323,13 @@ class ResponseWorker(QObject):
         self.message = message
         self.is_running = True
 
-    async def run(self):
+    @pyqtSlot()
+    def run(self):
+        asyncio.run(self._run_async())
+
+    async def _run_async(self):
         try:
+            self.db_operation.emit(self.chat_session, "user", self.message)
             async for response_chunk in self.chat_session.send_message(self.message):
                 if not self.is_running:
                     break
@@ -330,7 +345,6 @@ class ParameterDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Set Ollama Parameters")
         self.layout = QFormLayout(self)
-
         self.params = {}
         for param, value in current_params.items():
             if param != "stop":
@@ -338,7 +352,6 @@ class ParameterDialog(QDialog):
             else:
                 self.params[param] = QLineEdit(" ".join(value) if value else "", self)
             self.layout.addRow(QLabel(f"{param}:"), self.params[param])
-
         self.buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
             Qt.Orientation.Horizontal, self)
@@ -365,6 +378,7 @@ class ChatApp(QMainWindow):
         self.chat_session = None
         self.response_thread = None
         self.response_worker = None
+        self.current_message = None
 
         self.init_ui()
         self.load_last_chat()
@@ -495,24 +509,38 @@ class ChatApp(QMainWindow):
             self.input_field.clear()
             self.display_message("user", message)
             self.chat_display.append("")  # Add a new line after user message
-            self.process_response(message)
+            self.current_message = message
+            self.process_response()
 
-    def process_response(self, message):
-        if hasattr(self, 'response_thread') and self.response_thread is not None:
-            if self.response_thread.isRunning():
-                self.response_worker.stop()
-                self.response_thread.quit()
-                self.response_thread.wait()
+    def process_response(self):
+        if not hasattr(self, 'response_thread') or self.response_thread is None:
+            self.response_thread = QThread()
+            self.response_worker = None
 
-        self.response_worker = ResponseWorker(self.chat_session, message)
-        self.response_thread = QThread()
+        if self.response_worker is not None:
+            self.response_worker.stop()
+            self.response_worker.deleteLater()
+
+        self.response_worker = ResponseWorker(self.chat_session, self.current_message)
         self.response_worker.moveToThread(self.response_thread)
-        self.response_worker.finished.connect(self.response_thread.quit)
-        self.response_worker.finished.connect(self.response_worker.deleteLater)
-        self.response_thread.finished.connect(self.response_thread.deleteLater)
+
+        # Connect signals
+        self.response_worker.finished.connect(self.on_response_finished)
         self.response_worker.progress.connect(self.update_response)
-        self.response_thread.started.connect(lambda: asyncio.run(self.response_worker.run()))
+        self.response_worker.db_operation.connect(self.handle_db_operation)
+        
+        # Start the thread
+        self.response_thread.started.connect(self.response_worker.run)
         self.response_thread.start()
+
+    @pyqtSlot(object, str, str)
+    def handle_db_operation(self, chat_session, role, content):
+        chat_session.add_to_history(role, content)
+
+    def on_response_finished(self):
+        if self.response_thread and self.response_thread.isRunning():
+            self.response_thread.quit()
+            self.response_thread.wait()
 
     def update_response(self, response_chunk):
         cursor = self.chat_display.textCursor()
@@ -523,6 +551,11 @@ class ChatApp(QMainWindow):
         self.chat_display.ensureCursorVisible()
 
     def handle_command(self, command):
+        if command in ['Rename Chat', 'Delete Chat', 'Open Chat', 'Reset Chat', 'Set Parameters']:
+            if self.chat_session is None:
+                self.chat_display.append("Please connect to a service before performing this action.")
+                return
+        
         if command == 'New Chat':
             self.new_chat()
         elif command == 'Rename Chat':
@@ -581,7 +614,13 @@ class ChatApp(QMainWindow):
             chat_name, ok = QInputDialog.getItem(self, "Open Chat", "Select a chat to open:", chats, 0, False)
             if ok and chat_name:
                 self.history_manager.set_chat_name(chat_name)
-                self.chat_session.chat_history = self.history_manager.load_history()
+                loaded_history = self.history_manager.load_history()
+                
+                if self.chat_session is None:
+                    self.chat_display.append("Please connect to a service before opening a chat.")
+                    return
+                
+                self.chat_session.chat_history = loaded_history
                 self.chat_display.clear()
                 self.chat_display.append(f"Chat '{chat_name}' opened.")
                 self.load_chat_history()
@@ -633,6 +672,29 @@ class ChatApp(QMainWindow):
                 self.response_worker.stop()
                 self.response_thread.quit()
                 self.response_thread.wait()
+            
+            # Disconnect all signals
+            try:
+                self.response_worker.finished.disconnect()
+                self.response_worker.progress.disconnect()
+                self.response_worker.db_operation.disconnect()
+            except TypeError:
+                # Ignore errors if signals were not connected
+                pass
+            
+            try:
+                self.response_thread.finished.disconnect()
+            except TypeError:
+                # Ignore errors if signals were not connected
+                pass
+            
+            # Delete the worker and thread
+            if self.response_worker:
+                self.response_worker.deleteLater()
+            if self.response_thread:
+                self.response_thread.deleteLater()
+        
+        # Accept the close event
         event.accept()
 
 def main():

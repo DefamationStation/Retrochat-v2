@@ -5,3 +5,4 @@ settings.json
 chats.db
 retrochat-unit-tests.py
 __pycache__/retrochat.cpython-312.pyc
+.aider*
