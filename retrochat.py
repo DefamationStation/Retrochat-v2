@@ -191,6 +191,17 @@ class ChatProvider(ABC):
     def set_system_message(self, message: str):
         self.system_message = message
 
+    def format_message(self, message: str) -> str:
+        # Strip leading and trailing whitespace
+        message = message.strip()
+        # Split into paragraphs
+        paragraphs = message.split('\n\n')
+        # Remove any empty paragraphs
+        paragraphs = [p.strip() for p in paragraphs if p.strip()]
+        # Join paragraphs with a consistent number of newlines (e.g., two)
+        formatted_message = '\n\n'.join(paragraphs)
+        return formatted_message
+
 class OllamaChatSession(ChatProvider):
     def __init__(self, model_url: str, model: str, history_manager: ChatHistoryManager):
         super().__init__(history_manager)
@@ -236,7 +247,8 @@ class OllamaChatSession(ChatProvider):
                             if response_json.get('done', False):
                                 break
                     console.print()
-                    self.add_to_history("assistant", complete_message)
+                    formatted_message = self.format_message(complete_message)
+                    self.add_to_history("assistant", formatted_message)
                     self.save_history()
                 else:
                     console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
@@ -306,9 +318,10 @@ class AnthropicChatSession(ChatProvider):
                     response_json = await response.json()
                     assistant_message = response_json.get('content', [{}])[0].get('text', '')
                     if assistant_message:
-                        self.add_to_history("assistant", assistant_message)
+                        formatted_message = self.format_message(assistant_message)
+                        self.add_to_history("assistant", formatted_message)
                         self.save_history()
-                        console.print(assistant_message, style="yellow")
+                        console.print(formatted_message, style="yellow")
                     else:
                         console.print("No response content received.", style="bold red")
                 else:
@@ -321,47 +334,55 @@ class OpenAIChatSession(ChatProvider):
         self.base_url = base_url
         self.model = model
 
-    async def send_message(self, message: str):
-        self.add_to_history("user", message)
-        messages = [{"role": msg.role, "content": msg.content} for msg in self.chat_history]
-        
-        # Add system message if it exists
-        if self.system_message:
-            messages.insert(0, {"role": "system", "content": self.system_message})
-        
-        data = {
-            "model": self.model,
-            "messages": messages,
-            "stream": True
-        }
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}"
-        }
-        async with aiohttp.ClientSession() as session:
-            async with session.post(self.base_url, headers=headers, json=data) as response:
-                if response.status == 200:
-                    complete_message = ""
-                    async for line in response.content:
-                        if line:
-                            line = line.decode('utf-8').strip()
-                            if line.startswith("data: "):
-                                if line == "data: [DONE]":
-                                    break
-                                json_str = line[6:]
-                                try:
-                                    response_json = json.loads(json_str)
-                                    content = response_json['choices'][0]['delta'].get('content', '')
-                                    if content:
-                                        complete_message += content
-                                        console.print(content, end="", style="yellow")
-                                except json.JSONDecodeError:
-                                    continue
-                    console.print()
-                    self.add_to_history("assistant", complete_message)
-                    self.save_history()
-                else:
-                    console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
+    class OpenAIChatSession(ChatProvider):
+        def __init__(self, api_key: str, base_url: str, model: str, history_manager: ChatHistoryManager):
+            super().__init__(history_manager)
+            self.api_key = api_key
+            self.base_url = base_url
+            self.model = model
+
+        async def send_message(self, message: str):
+            self.add_to_history("user", message)
+            messages = [{"role": msg.role, "content": msg.content} for msg in self.chat_history]
+            
+            # Add system message if it exists
+            if self.system_message:
+                messages.insert(0, {"role": "system", "content": self.system_message})
+            
+            data = {
+                "model": self.model,
+                "messages": messages,
+                "stream": True
+            }
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}"
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(self.base_url, headers=headers, json=data) as response:
+                    if response.status == 200:
+                        complete_message = ""
+                        async for line in response.content:
+                            if line:
+                                line = line.decode('utf-8').strip()
+                                if line.startswith("data: "):
+                                    if line == "data: [DONE]":
+                                        break
+                                    json_str = line[6:]
+                                    try:
+                                        response_json = json.loads(json_str)
+                                        content = response_json['choices'][0]['delta'].get('content', '')
+                                        if content:
+                                            complete_message += content
+                                            console.print(content, end="", style="yellow")
+                                    except json.JSONDecodeError:
+                                        continue
+                        console.print()
+                        formatted_message = self.format_message(complete_message)
+                        self.add_to_history("assistant", formatted_message)
+                        self.save_history()
+                    else:
+                        console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
 
 class ChatProviderFactory:
     @staticmethod
