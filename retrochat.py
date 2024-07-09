@@ -1,4 +1,5 @@
 import os
+import platform
 import sys
 import asyncio
 import aiohttp
@@ -6,6 +7,8 @@ import sqlite3
 import base64
 import json
 import logging
+import tempfile
+import subprocess
 from dataclasses import dataclass, asdict
 from typing import List, Optional, Dict, Any
 from prompt_toolkit import PromptSession
@@ -17,6 +20,7 @@ from abc import ABC, abstractmethod
 from rich.console import Console
 from rich.prompt import Prompt
 from dotenv import load_dotenv, set_key
+import shutil
 
 # Constants
 USER_HOME = os.path.expanduser('~')
@@ -27,11 +31,77 @@ SETTINGS_FILE = os.path.join(RETROCHAT_DIR, 'settings.json')
 ANTHROPIC_API_KEY_NAME = "ANTHROPIC_API_KEY"
 OPENAI_API_KEY_NAME = "OPENAI_API_KEY"
 LAST_CHAT_NAME_KEY = "LAST_CHAT_NAME"
+RETROCHAT_SCRIPT = os.path.join(RETROCHAT_DIR, 'retrochat.py')
 
 os.makedirs(RETROCHAT_DIR, exist_ok=True)
 
 # Initialize rich console
 console = Console()
+
+# Self-setup functionality
+def setup_rchat():
+    os.makedirs(RETROCHAT_DIR, exist_ok=True)
+    
+    # Copy the current script to RETROCHAT_DIR
+    current_script = sys.argv[0]
+    shutil.copy2(current_script, RETROCHAT_SCRIPT)
+    console.print(f"Copied RetroChat script to {RETROCHAT_SCRIPT}", style="cyan")
+    
+    rchat_bat_path = os.path.join(RETROCHAT_DIR, "rchat.bat")
+    
+    if not os.path.exists(rchat_bat_path):
+        with open(rchat_bat_path, "w") as f:
+            f.write(f'@echo off\npython "{RETROCHAT_SCRIPT}" %*')
+        console.print(f"Created rchat.bat at {rchat_bat_path}", style="cyan")
+    
+    # Add RETROCHAT_DIR to PATH
+    if sys.platform.startswith('win'):
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_ALL_ACCESS)
+        try:
+            path, _ = winreg.QueryValueEx(key, "Path")
+            if RETROCHAT_DIR not in path:
+                new_path = f"{path};{RETROCHAT_DIR}"
+                winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, new_path)
+                console.print(f"Added {RETROCHAT_DIR} to PATH.", style="cyan")
+            else:
+                console.print(f"{RETROCHAT_DIR} is already in PATH.", style="cyan")
+        except WindowsError:
+            winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, RETROCHAT_DIR)
+            console.print(f"Created PATH and added {RETROCHAT_DIR}.", style="cyan")
+        finally:
+            winreg.CloseKey(key)
+    else:
+        # For Unix-like systems
+        shell = os.environ.get("SHELL", "").split("/")[-1]
+        rc_file = f".{shell}rc"
+        rc_path = os.path.join(USER_HOME, rc_file)
+        
+        with open(rc_path, "a") as f:
+            f.write(f'\nexport PATH="$PATH:{RETROCHAT_DIR}"')
+        
+        console.print(f"Added {RETROCHAT_DIR} to PATH in {rc_path}", style="cyan")
+        console.print(f"Please run 'source ~/{rc_file}' or restart your terminal for the changes to take effect.", style="cyan")
+
+    console.print("Setup complete. You can now use the 'rchat' command from anywhere.", style="green")
+
+def check_and_setup():
+    rchat_bat_path = os.path.join(RETROCHAT_DIR, "rchat.bat")
+    if not os.path.exists(rchat_bat_path) or not os.path.exists(RETROCHAT_SCRIPT):
+        console.print("RetroChat Setup", style="bold cyan")
+        console.print("This setup will do the following:", style="cyan")
+        console.print("1. Create a '.retrochat' folder in your home directory", style="cyan")
+        console.print("2. Copy the RetroChat script to the '.retrochat' folder", style="cyan")
+        console.print("3. Create an 'rchat.bat' file in the '.retrochat' folder", style="cyan")
+        console.print("4. Add the '.retrochat' folder to your system PATH", style="cyan")
+        console.print("\nThis will allow you to run RetroChat from anywhere using the 'rchat' command.", style="cyan")
+        
+        response = Prompt.ask("Do you want to proceed with the setup?", choices=["yes", "no"])
+        if response.lower() == "yes":
+            setup_rchat()
+        else:
+            console.print("Setup cancelled. You can run the setup later by using the --setup flag.", style="yellow")
+
 
 @dataclass
 class ChatMessage:
@@ -191,6 +261,13 @@ class ChatProvider(ABC):
     def set_system_message(self, message: str):
         self.system_message = message
 
+    def format_message(self, message: str) -> str:
+        message = message.strip()
+        paragraphs = message.split('\n\n')
+        paragraphs = [p.strip() for p in paragraphs if p.strip()]
+        formatted_message = '\n\n'.join(paragraphs)
+        return formatted_message
+
 class OllamaChatSession(ChatProvider):
     def __init__(self, model_url: str, model: str, history_manager: ChatHistoryManager):
         super().__init__(history_manager)
@@ -212,7 +289,6 @@ class OllamaChatSession(ChatProvider):
         self.add_to_history("user", message)
         messages = [{"role": msg.role, "content": msg.content} for msg in self.chat_history]
         
-        # Add system message if it exists
         if self.system_message:
             messages.insert(0, {"role": "system", "content": self.system_message})
         
@@ -236,10 +312,13 @@ class OllamaChatSession(ChatProvider):
                             if response_json.get('done', False):
                                 break
                     console.print()
-                    self.add_to_history("assistant", complete_message)
+                    formatted_message = self.format_message(complete_message)
+                    self.add_to_history("assistant", formatted_message)
                     self.save_history()
+                    return formatted_message
                 else:
                     console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
+                    return None
 
     def set_parameter(self, param: str, value: Any):
         if param in self.default_parameters:
@@ -285,7 +364,6 @@ class AnthropicChatSession(ChatProvider):
         self.add_to_history("user", message)
         messages = [{"role": msg.role, "content": msg.content} for msg in self.chat_history]
         
-        # Add system message if it exists
         if self.system_message:
             messages.insert(0, {"role": "system", "content": self.system_message})
         
@@ -306,13 +384,16 @@ class AnthropicChatSession(ChatProvider):
                     response_json = await response.json()
                     assistant_message = response_json.get('content', [{}])[0].get('text', '')
                     if assistant_message:
-                        self.add_to_history("assistant", assistant_message)
+                        formatted_message = self.format_message(assistant_message)
+                        self.add_to_history("assistant", formatted_message)
                         self.save_history()
-                        console.print(assistant_message, style="yellow")
+                        console.print(formatted_message, style="yellow")
+                        return formatted_message
                     else:
                         console.print("No response content received.", style="bold red")
                 else:
                     console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
+                return None
 
 class OpenAIChatSession(ChatProvider):
     def __init__(self, api_key: str, base_url: str, model: str, history_manager: ChatHistoryManager):
@@ -325,7 +406,6 @@ class OpenAIChatSession(ChatProvider):
         self.add_to_history("user", message)
         messages = [{"role": msg.role, "content": msg.content} for msg in self.chat_history]
         
-        # Add system message if it exists
         if self.system_message:
             messages.insert(0, {"role": "system", "content": self.system_message})
         
@@ -358,10 +438,13 @@ class OpenAIChatSession(ChatProvider):
                                 except json.JSONDecodeError:
                                     continue
                     console.print()
-                    self.add_to_history("assistant", complete_message)
+                    formatted_message = self.format_message(complete_message)
+                    self.add_to_history("assistant", formatted_message)
                     self.save_history()
+                    return formatted_message
                 else:
                     console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
+                    return None
 
 class ChatProviderFactory:
     @staticmethod
@@ -402,6 +485,8 @@ class CommandHandler:
                     self.handle_set(args[0], args[1], session)
             else:
                 console.print("The /set command is only available for Ollama sessions, except for /set system.", style="bold red")
+        elif cmd == '/edit':
+            await self.chat_app.edit_conversation(session)
         elif cmd == '/help':
             self.display_help()
         else:
@@ -476,6 +561,7 @@ class CommandHandler:
         console.print("/set system <message> - Set the global system message", style="green")
         console.print("/set - Show available parameters and their current values (Ollama only)", style="green")
         console.print("/set <parameter> <value> - Set a parameter (Ollama only)", style="green")
+        console.print("/edit - Edit the entire conversation", style="green")
         console.print("/help - Display this help message", style="green")
         console.print("/exit - Exit the program", style="green")
 
@@ -543,11 +629,75 @@ class ChatApp:
     def set_global_system_message(self, message: str):
         self.global_system_message = message
 
+    async def edit_conversation(self, session: ChatProvider):
+        # Convert chat history to a string
+        chat_text = ""
+        for msg in session.chat_history:
+            chat_text += f"{msg.role.upper()}:\n{msg.content}\n\n"
+
+        # Create a temporary file with the chat history
+        with tempfile.NamedTemporaryFile(mode='w+', suffix='.txt', delete=False) as temp_file:
+            temp_file.write(chat_text)
+            temp_file_path = temp_file.name
+
+        # Determine the appropriate editor command
+        if platform.system() == 'Windows':
+            editor_cmd = ['notepad.exe', temp_file_path]
+        else:
+            editor = os.environ.get('EDITOR', 'nano')
+            editor_cmd = [editor, temp_file_path]
+
+        # Open the text editor
+        try:
+            subprocess.run(editor_cmd, check=True)
+        except subprocess.CalledProcessError:
+            console.print(f"Error: Unable to open the default editor.", style="bold red")
+            console.print("You can manually edit the file at:", style="cyan")
+            console.print(temp_file_path, style="yellow")
+            console.print("After editing, press Enter to continue.", style="cyan")
+            input()
+
+        # Read the edited content
+        with open(temp_file_path, 'r') as file:
+            edited_content = file.read()
+
+        # Remove the temporary file
+        os.unlink(temp_file_path)
+
+        # Parse the edited content back into chat history
+        new_history = []
+        current_role = None
+        current_content = []
+
+        for line in edited_content.split('\n'):
+            line = line.strip()
+            if line.upper() in ['USER:', 'ASSISTANT:']:
+                if current_role is not None:
+                    new_history.append(ChatMessage(role=current_role, content='\n'.join(current_content).strip()))
+                current_role = line[:-1].lower()
+                current_content = []
+            elif line:
+                current_content.append(line)
+
+        if current_role is not None:
+            new_history.append(ChatMessage(role=current_role, content='\n'.join(current_content).strip()))
+
+        # Update the session's chat history
+        session.chat_history = new_history
+        session.save_history()
+        console.print("Chat history updated successfully.", style="cyan")
+        session.display_history()
+
     async def start(self):
         try:
             console.clear()
             console.print("Welcome to Retrochat!", style="bold green")
+            
+            # Check for setup
+            check_and_setup()
+            
             console.print("Select the mode:\n1. Ollama\n2. Anthropic\n3. OpenAI", style="cyan")
+
 
             mode = Prompt.ask("Enter your choice", choices=["1", "2", "3"])
 
@@ -615,8 +765,11 @@ class ChatApp:
         return '\n'.join(lines)
 
 async def main():
-    app = ChatApp()
-    await app.start()
+    if len(sys.argv) > 1 and sys.argv[1] == "--setup":
+        setup_rchat()
+    else:
+        app = ChatApp()
+        await app.start()
 
 if __name__ == "__main__":
     asyncio.run(main())
