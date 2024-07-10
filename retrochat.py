@@ -270,6 +270,7 @@ class ChatProvider(ABC):
 
     def set_system_message(self, message: str):
         self.system_message = message
+        console.print(f"System message set for the current session: {message}", style="cyan")
 
     def format_message(self, message: str) -> str:
         message = message.strip()
