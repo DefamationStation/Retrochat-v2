@@ -1,16 +1,19 @@
 # RetroChat
-RetroChat is a command-line application that provides a seamless interface for conversing with different AI language models. It supports multiple chat providers, including Ollama, Anthropic, and OpenAI. Key features include:
+# RetroChat
 
-Multi-provider support: Users can choose between Ollama, Anthropic (Claude), and OpenAI (GPT) models.
-Persistent chat history: Conversations are saved and can be resumed across sessions.
-Chat management: Users can create, rename, delete, and switch between multiple chat sessions.
-Customizable settings: For Ollama, users can adjust various parameters to fine-tune the AI's behavior.
-Conversation editing: Users can edit the entire conversation history using their preferred text editor.
-System message support: Users can set global system messages to guide the AI's behavior across all chats.
-Multi-line input: The app supports entering multiple lines of text for complex queries or code snippets.
-Command system: A set of commands (prefixed with '/') allows users to control various aspects of the chat and application.
-Secure API key management: API keys for Anthropic and OpenAI are securely stored and managed.
-Local setup: The app can set itself up in the user's home directory for easy access from anywhere in the system.
+RetroChat is a powerful command-line interface for interacting with various AI language models. It provides a seamless experience for engaging with different chat providers while offering robust features for managing and customizing your conversations.
+
+## Features
+
+- **Multi-Provider Support**: Choose between Ollama, Anthropic (Claude), and OpenAI (GPT) models.
+- **Persistent Chat History**: Save and resume conversations across sessions.
+- **Chat Management**: Create, rename, delete, and switch between multiple chat sessions.
+- **Customizable Settings**: Fine-tune AI behavior with adjustable parameters (Ollama).
+- **Conversation Editing**: Edit entire conversation history using your preferred text editor.
+- **System Message Support**: Set global system messages to guide AI behavior across all chats.
+- **Multi-line Input**: Enter complex queries or code snippets with ease.
+- **Command System**: Control various aspects of the chat and application with '/' prefixed commands.
+- **Local Setup**: Easy installation in your home directory for system-wide access.
 
 ## Installation
 
