@@ -139,7 +139,6 @@ class ChatHistoryManager:
         self.conn = sqlite3.connect(self.db_file)
         self._create_tables()
         self._update_schema()
-        logging.basicConfig(level=logging.DEBUG)
 
     def _create_tables(self):
         with self.conn:
