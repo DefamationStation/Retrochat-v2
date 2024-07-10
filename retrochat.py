@@ -3,6 +3,7 @@ import platform
 import sys
 import asyncio
 import aiohttp
+import requests
 import sqlite3
 import base64
 import json
@@ -31,6 +32,8 @@ SETTINGS_FILE = os.path.join(RETROCHAT_DIR, 'settings.json')
 ANTHROPIC_API_KEY_NAME = "ANTHROPIC_API_KEY"
 OPENAI_API_KEY_NAME = "OPENAI_API_KEY"
 LAST_CHAT_NAME_KEY = "LAST_CHAT_NAME"
+OLLAMA_IP_KEY = "OLLAMA_IP"
+OLLAMA_PORT_KEY = "OLLAMA_PORT"
 RETROCHAT_SCRIPT = os.path.join(RETROCHAT_DIR, 'retrochat.py')
 
 os.makedirs(RETROCHAT_DIR, exist_ok=True)
@@ -47,12 +50,21 @@ def setup_rchat():
     shutil.copy2(current_script, RETROCHAT_SCRIPT)
     console.print(f"Copied RetroChat script to {RETROCHAT_SCRIPT}", style="cyan")
     
+    # Create rchat.bat
     rchat_bat_path = os.path.join(RETROCHAT_DIR, "rchat.bat")
+    with open(rchat_bat_path, "w") as f:
+        f.write(f'@echo off\npython "{RETROCHAT_SCRIPT}" %*')
+    console.print(f"Created rchat.bat at {rchat_bat_path}", style="cyan")
     
-    if not os.path.exists(rchat_bat_path):
-        with open(rchat_bat_path, "w") as f:
-            f.write(f'@echo off\npython "{RETROCHAT_SCRIPT}" %*')
-        console.print(f"Created rchat.bat at {rchat_bat_path}", style="cyan")
+    # Create .env file
+    if not os.path.exists(ENV_FILE):
+        with open(ENV_FILE, "w") as f:
+            f.write(f"{ANTHROPIC_API_KEY_NAME}=\n")
+            f.write(f"{OPENAI_API_KEY_NAME}=\n")
+            f.write(f"{LAST_CHAT_NAME_KEY}=default\n")
+            f.write(f"{OLLAMA_IP_KEY}=localhost\n")
+            f.write(f"{OLLAMA_PORT_KEY}=11434\n")
+        console.print(f"Created .env file at {ENV_FILE}", style="cyan")
     
     # Add RETROCHAT_DIR to PATH
     if sys.platform.startswith('win'):
@@ -101,7 +113,6 @@ def check_and_setup():
             setup_rchat()
         else:
             console.print("Setup cancelled. You can run the setup later by using the --setup flag.", style="yellow")
-
 
 @dataclass
 class ChatMessage:
@@ -567,9 +578,6 @@ class CommandHandler:
 
 class ChatApp:
     def __init__(self):
-        self.model_url_ollama = "http://localhost:11434/api/chat"
-        self.model_url_anthropic = "https://api.anthropic.com/v1/messages"
-        self.openai_base_url = "https://api.openai.com/v1/chat/completions"
         self.chat_name = 'default'
         self.history_manager = ChatHistoryManager(DB_FILE)
         self.command_handler = CommandHandler(self.history_manager, self)
@@ -577,6 +585,8 @@ class ChatApp:
         self.openai_api_key = None
         self.anthropic_api_key = None
         self.global_system_message = None
+        self.ollama_ip = None
+        self.ollama_port = None
 
         self.load_env_variables()
         self.save_last_chat_name(self.chat_name)
@@ -587,6 +597,8 @@ class ChatApp:
             self.openai_api_key = os.getenv(OPENAI_API_KEY_NAME)
             self.anthropic_api_key = os.getenv(ANTHROPIC_API_KEY_NAME)
             self.chat_name = os.getenv(LAST_CHAT_NAME_KEY, 'default')
+            self.ollama_ip = os.getenv(OLLAMA_IP_KEY, 'localhost')
+            self.ollama_port = os.getenv(OLLAMA_PORT_KEY, '11434')
             self.history_manager.set_chat_name(self.chat_name)
 
     def ensure_api_key(self, key_name: str, env_var: str):
@@ -604,8 +616,29 @@ class ChatApp:
                 return False
         return True
 
+    def ensure_ollama_connection(self):
+        url = f"http://{self.ollama_ip}:{self.ollama_port}/api/tags"
+        try:
+            response = requests.get(url)
+            response.raise_for_status()
+            return True
+        except requests.RequestException:
+            console.print(f"Unable to connect to Ollama at {self.ollama_ip}:{self.ollama_port}", style="bold red")
+            new_ip = Prompt.ask("Enter Ollama IP (press Enter for localhost)")
+            new_port = Prompt.ask("Enter Ollama port (press Enter for 11434)")
+            
+            self.ollama_ip = new_ip or 'localhost'
+            self.ollama_port = new_port or '11434'
+            
+            set_key(ENV_FILE, OLLAMA_IP_KEY, self.ollama_ip)
+            set_key(ENV_FILE, OLLAMA_PORT_KEY, self.ollama_port)
+            load_dotenv(ENV_FILE)
+            
+            console.print(f"Ollama connection details updated and saved in the .env file.", style="cyan")
+            return self.ensure_ollama_connection()
+
     async def select_ollama_model(self) -> str:
-        url = "http://localhost:11434/api/tags"
+        url = f"http://{self.ollama_ip}:{self.ollama_port}/api/tags"
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as response:
                 if response.status == 200:
@@ -698,14 +731,16 @@ class ChatApp:
             
             console.print("Select the mode:\n1. Ollama\n2. Anthropic\n3. OpenAI", style="cyan")
 
-
             mode = Prompt.ask("Enter your choice", choices=["1", "2", "3"])
 
             if mode == '1':
+                if not self.ensure_ollama_connection():
+                    return
                 selected_model = await self.select_ollama_model()
                 if not selected_model:
                     return
-                session = self.provider_factory.create_provider('Ollama', self.model_url_ollama, selected_model, self.history_manager)
+                model_url = f"http://{self.ollama_ip}:{self.ollama_port}/api/chat"
+                session = self.provider_factory.create_provider('Ollama', model_url, selected_model, self.history_manager)
             elif mode == '2':
                 if not self.ensure_api_key('anthropic_api_key', ANTHROPIC_API_KEY_NAME):
                     return
