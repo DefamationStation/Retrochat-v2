@@ -512,6 +512,9 @@ class CommandHandler:
     def handle_set_system(self, message: str):
         self.chat_app.set_global_system_message(message)
         console.print(f"Global system message set to: {message}", style="cyan")
+        if self.chat_app.current_session:
+            self.chat_app.current_session.set_system_message(message)
+            console.print("System message updated for the current session.", style="cyan")
 
     async def handle_rename(self, new_name: str, session: ChatProvider):
         if new_name:
@@ -661,6 +664,8 @@ class ChatApp:
 
     def set_global_system_message(self, message: str):
         self.global_system_message = message
+        if self.current_session:
+            self.current_session.set_system_message(message)
 
     async def edit_conversation(self, session: ChatProvider):
         # Convert chat history to a string
