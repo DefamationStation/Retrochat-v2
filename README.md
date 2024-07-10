@@ -28,3 +28,4 @@ After installation, you can start RetroChat by running the shortcut command:
 ```
 'rchat' straight from a new terminal anywhere.
 ```
+[Watch the video](https://vimeo.com/981646011)
