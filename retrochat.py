@@ -270,7 +270,6 @@ class ChatProvider(ABC):
 
     def set_system_message(self, message: str):
         self.system_message = message
-        console.print(f"System message set for the current session: {message}", style="cyan")
 
     def format_message(self, message: str) -> str:
         message = message.strip()
@@ -514,7 +513,6 @@ class CommandHandler:
         console.print(f"Global system message set to: {message}", style="cyan")
         if self.chat_app.current_session:
             self.chat_app.current_session.set_system_message(message)
-            console.print("System message updated for the current session.", style="cyan")
 
     async def handle_rename(self, new_name: str, session: ChatProvider):
         if new_name:
@@ -590,6 +588,7 @@ class ChatApp:
         self.global_system_message = None
         self.ollama_ip = None
         self.ollama_port = None
+        self.current_session = None
 
         self.load_env_variables()
         self.save_last_chat_name(self.chat_name)
@@ -666,6 +665,9 @@ class ChatApp:
         self.global_system_message = message
         if self.current_session:
             self.current_session.set_system_message(message)
+        else:
+            console.print("No active session. The system message will be applied when a session starts.", style="yellow")
+
 
     async def edit_conversation(self, session: ChatProvider):
         # Convert chat history to a string
@@ -745,18 +747,20 @@ class ChatApp:
                 if not selected_model:
                     return
                 model_url = f"http://{self.ollama_ip}:{self.ollama_port}/api/chat"
-                session = self.provider_factory.create_provider('Ollama', model_url, selected_model, self.history_manager)
+                self.current_session = self.provider_factory.create_provider('Ollama', model_url, selected_model, self.history_manager)
             elif mode == '2':
                 if not self.ensure_api_key('anthropic_api_key', ANTHROPIC_API_KEY_NAME):
                     return
-                session = self.provider_factory.create_provider('Anthropic', self.anthropic_api_key, self.model_url_anthropic, self.history_manager)
+                self.current_session = self.provider_factory.create_provider('Anthropic', self.anthropic_api_key, "https://api.anthropic.com/v1/messages", self.history_manager)
             elif mode == '3':
                 if not self.ensure_api_key('openai_api_key', OPENAI_API_KEY_NAME):
                     return
-                session = self.provider_factory.create_provider('OpenAI', self.openai_api_key, self.openai_base_url, "gpt-4", self.history_manager)
+                self.current_session = self.provider_factory.create_provider('OpenAI', self.openai_api_key, "https://api.openai.com/v1/chat/completions", "gpt-4", self.history_manager)
 
-            session.set_system_message(self.global_system_message)
-            session.display_history()
+            if self.global_system_message:
+                self.current_session.set_system_message(self.global_system_message)
+            
+            self.current_session.display_history()
 
             while True:
                 try:
@@ -766,10 +770,10 @@ class ChatApp:
                         console.print("Thank you for chatting. Goodbye!", style="cyan")
                         break
                     elif user_input.startswith('/'):
-                        await self.command_handler.handle_command(user_input, session)
+                        await self.command_handler.handle_command(user_input, self.current_session)
                     elif user_input:  # Only send non-empty messages
-                        await session.send_message(user_input)
-                        session.save_history()  # Save history after each message
+                        await self.current_session.send_message(user_input)
+                        self.current_session.save_history()  # Save history after each message
                 except KeyboardInterrupt:
                     continue  # Allow Ctrl+C to clear the current input
                 except EOFError:
@@ -778,7 +782,8 @@ class ChatApp:
         except Exception as e:
             console.print(f"\nAn unexpected error occurred: {e}", style="bold red")
         finally:
-            session.save_history()  # Ensure history is saved when exiting
+            if self.current_session:
+                self.current_session.save_history()  # Ensure history is saved when exiting
 
     async def get_multiline_input(self) -> str:
         lines = []
