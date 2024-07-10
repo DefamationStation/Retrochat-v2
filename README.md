@@ -29,10 +29,10 @@ To run RetroChat, you need Python 3.7 or higher installed on your system. Follow
 
 ## Usage
 
-After installation, you can start RetroChat by running:
+After installation, you can start RetroChat by running the shortcut command:
 
 ```
-python retrochat.py
+'rchat' straight from the terminal
 ```
 
 For first-time setup, use:
