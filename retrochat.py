@@ -621,7 +621,7 @@ class ChatApp:
     def ensure_ollama_connection(self):
         url = f"http://{self.ollama_ip}:{self.ollama_port}/api/tags"
         try:
-            response = requests.get(url)
+            response = requests.get(url, timeout=5)
             response.raise_for_status()
             return True
         except requests.RequestException:
