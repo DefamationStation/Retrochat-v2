@@ -409,15 +409,16 @@ class AnthropicChatSession(ChatProvider):
             messages.insert(0, {"role": "system", "content": self.system_message})
         
         data = {
-            "model": "claude-3-5-sonnet-20240620",
-            "max_tokens": 4096,
-            "temperature": 0.0,
+            "model": "claude-3-sonnet-20240229",
+            "max_tokens": 8192,
+            "temperature": 0.8,
             "messages": messages
         }
         headers = {
             "Content-Type": "application/json",
             "X-API-Key": self.api_key,
-            "anthropic-version": "2023-06-01"
+            "anthropic-version": "2023-06-01",
+            "anthropic-beta": "max-tokens-3-5-sonnet-2024-07-15"
         }
         async with aiohttp.ClientSession() as session:
             async with session.post(self.model_url, json=data, headers=headers) as response:
