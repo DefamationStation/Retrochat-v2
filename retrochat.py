@@ -146,7 +146,9 @@ class ChatHistoryManager:
                 CREATE TABLE IF NOT EXISTS chat_sessions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     chat_name TEXT NOT NULL UNIQUE,
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    system_message TEXT,
+                    parameters TEXT
                 );
                 CREATE TABLE IF NOT EXISTS chat_messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -162,12 +164,14 @@ class ChatHistoryManager:
         try:
             with self.conn:
                 cursor = self.conn.cursor()
-                cursor.execute("PRAGMA table_info(chat_messages)")
+                cursor.execute("PRAGMA table_info(chat_sessions)")
                 columns = [column[1] for column in cursor.fetchall()]
                 
-                if 'role' not in columns:
-                    self.conn.execute('ALTER TABLE chat_messages ADD COLUMN role TEXT NOT NULL DEFAULT "user"')
-                    logging.info("Database schema updated successfully.")
+                if 'system_message' not in columns:
+                    self.conn.execute('ALTER TABLE chat_sessions ADD COLUMN system_message TEXT')
+                if 'parameters' not in columns:
+                    self.conn.execute('ALTER TABLE chat_sessions ADD COLUMN parameters TEXT')
+                logging.info("Database schema updated successfully.")
         except Exception as e:
             logging.error(f"Error updating database schema: {e}")
 
@@ -204,6 +208,31 @@ class ChatHistoryManager:
             logging.error(f"Error loading chat history: {e}")
             return []
 
+    def save_system_message(self, system_message: str):
+        session_id = self._get_session_id(self.chat_name)
+        with self.conn:
+            self.conn.execute('UPDATE chat_sessions SET system_message = ? WHERE id = ?', (system_message, session_id))
+
+    def load_system_message(self) -> Optional[str]:
+        session_id = self._get_session_id(self.chat_name)
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT system_message FROM chat_sessions WHERE id = ?', (session_id,))
+        result = cursor.fetchone()
+        return result[0] if result else None
+
+    def save_parameters(self, parameters: Dict[str, Any]):
+        session_id = self._get_session_id(self.chat_name)
+        parameters_json = json.dumps(parameters)
+        with self.conn:
+            self.conn.execute('UPDATE chat_sessions SET parameters = ? WHERE id = ?', (parameters_json, session_id))
+
+    def load_parameters(self) -> Dict[str, Any]:
+        session_id = self._get_session_id(self.chat_name)
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT parameters FROM chat_sessions WHERE id = ?', (session_id,))
+        result = cursor.fetchone()
+        return json.loads(result[0]) if result and result[0] else {}
+
     def clear_history(self):
         session_id = self._get_session_id(self.chat_name)
         with self.conn:
@@ -234,7 +263,7 @@ class ChatProvider(ABC):
     def __init__(self, history_manager: ChatHistoryManager):
         self.history_manager = history_manager
         self.chat_history = self.load_history()
-        self.system_message = None
+        self.system_message = self.history_manager.load_system_message()
 
     def load_history(self) -> List[ChatMessage]:
         try:
@@ -270,6 +299,7 @@ class ChatProvider(ABC):
 
     def set_system_message(self, message: str):
         self.system_message = message
+        self.history_manager.save_system_message(message)
 
     def format_message(self, message: str) -> str:
         message = message.strip()
@@ -283,7 +313,7 @@ class OllamaChatSession(ChatProvider):
         super().__init__(history_manager)
         self.model_url = model_url
         self.model = model
-        self.parameters = {}
+        self.parameters = self.history_manager.load_parameters()
         self.default_parameters = {
             "num_predict": 128,
             "top_k": 40,
@@ -339,6 +369,7 @@ class OllamaChatSession(ChatProvider):
             elif param == "stop":
                 value = value.split()  # Split into a list
             self.parameters[param] = value
+            self.history_manager.save_parameters(self.parameters)
             console.print(f"Parameter '{param}' set to {value}", style="cyan")
         else:
             console.print(f"Invalid parameter: {param}", style="bold red")
@@ -487,7 +518,7 @@ class CommandHandler:
                 self.display_help()
         elif cmd == '/set':
             if args[0] == 'system':
-                self.handle_set_system(args[1])
+                self.handle_set_system(args[1], session)
             elif isinstance(session, OllamaChatSession):
                 if not args[0]:
                     session.show_parameters()
@@ -508,11 +539,9 @@ class CommandHandler:
         else:
             session.set_parameter(param, value)
 
-    def handle_set_system(self, message: str):
-        self.chat_app.set_global_system_message(message)
-        console.print(f"Global system message set to: {message}", style="cyan")
-        if self.chat_app.current_session:
-            self.chat_app.current_session.set_system_message(message)
+    def handle_set_system(self, message: str, session: ChatProvider):
+        session.set_system_message(message)
+        console.print(f"System message set to: {message}", style="cyan")
 
     async def handle_rename(self, new_name: str, session: ChatProvider):
         if new_name:
@@ -554,6 +583,9 @@ class CommandHandler:
             if chat_name in self.history_manager.list_chats():
                 self.history_manager.set_chat_name(chat_name)
                 session.chat_history = self.history_manager.load_history()
+                session.system_message = self.history_manager.load_system_message()
+                if isinstance(session, OllamaChatSession):
+                    session.parameters = self.history_manager.load_parameters()
                 console.print(f"Chat '{chat_name}' opened.", style="cyan")
                 session.display_history()
                 self.chat_app.save_last_chat_name(chat_name)
@@ -570,7 +602,7 @@ class CommandHandler:
         console.print("/chat reset - Reset the current chat history", style="green")
         console.print("/chat list - List all available chats", style="green")
         console.print("/chat open <chat_name> - Open a specific chat", style="green")
-        console.print("/set system <message> - Set the global system message", style="green")
+        console.print("/set system <message> - Set the system message", style="green")
         console.print("/set - Show available parameters and their current values (Ollama only)", style="green")
         console.print("/set <parameter> <value> - Set a parameter (Ollama only)", style="green")
         console.print("/edit - Edit the entire conversation", style="green")
@@ -585,7 +617,6 @@ class ChatApp:
         self.provider_factory = ChatProviderFactory()
         self.openai_api_key = None
         self.anthropic_api_key = None
-        self.global_system_message = None
         self.ollama_ip = None
         self.ollama_port = None
         self.current_session = None
@@ -660,14 +691,6 @@ class ChatApp:
 
     def save_last_chat_name(self, chat_name: str):
         set_key(ENV_FILE, LAST_CHAT_NAME_KEY, chat_name)
-
-    def set_global_system_message(self, message: str):
-        self.global_system_message = message
-        if self.current_session:
-            self.current_session.set_system_message(message)
-        else:
-            console.print("No active session. The system message will be applied when a session starts.", style="yellow")
-
 
     async def edit_conversation(self, session: ChatProvider):
         # Convert chat history to a string
@@ -757,9 +780,6 @@ class ChatApp:
                     return
                 self.current_session = self.provider_factory.create_provider('OpenAI', self.openai_api_key, "https://api.openai.com/v1/chat/completions", "gpt-4", self.history_manager)
 
-            if self.global_system_message:
-                self.current_session.set_system_message(self.global_system_message)
-            
             self.current_session.display_history()
 
             while True:
