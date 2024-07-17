@@ -403,17 +403,18 @@ class AnthropicChatSession(ChatProvider):
 
     async def send_message(self, message: str):
         self.add_to_history("user", message)
-        messages = [{"role": msg.role, "content": msg.content} for msg in self.chat_history]
-        
-        if self.system_message:
-            messages.insert(0, {"role": "system", "content": self.system_message})
+        messages = self.prepare_messages()
         
         data = {
-            "model": "claude-3-sonnet-20240229",
+            "model": "claude-3-5-sonnet-20240620",
             "max_tokens": 8192,
             "temperature": 0.8,
             "messages": messages
         }
+
+        if self.system_message:
+            data["system"] = self.system_message
+
         headers = {
             "Content-Type": "application/json",
             "X-API-Key": self.api_key,
@@ -436,6 +437,17 @@ class AnthropicChatSession(ChatProvider):
                 else:
                     console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
                 return None
+
+    def prepare_messages(self):
+        messages = []
+        for msg in self.chat_history:
+            if msg.role != "system":
+                if not messages or messages[-1]["role"] != msg.role:
+                    messages.append({"role": msg.role, "content": msg.content})
+                else:
+                    # If the roles are the same, combine the contents
+                    messages[-1]["content"] += "\n" + msg.content
+        return messages
 
 class OpenAIChatSession(ChatProvider):
     def __init__(self, api_key: str, base_url: str, model: str, history_manager: ChatHistoryManager):
