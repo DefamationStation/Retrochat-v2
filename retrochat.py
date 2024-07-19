@@ -396,17 +396,18 @@ class OllamaChatSession(ChatProvider):
         return descriptions.get(param, "")
 
 class AnthropicChatSession(ChatProvider):
-    def __init__(self, api_key: str, model_url: str, history_manager: ChatHistoryManager):
+    def __init__(self, api_key: str, model_url: str, history_manager: ChatHistoryManager, model: str):
         super().__init__(history_manager)
         self.api_key = api_key
         self.model_url = model_url
+        self.model = model
 
     async def send_message(self, message: str):
         self.add_to_history("user", message)
         messages = self.prepare_messages()
         
         data = {
-            "model": "claude-3-5-sonnet-20240620",
+            "model": self.model,
             "max_tokens": 8192,
             "temperature": 0.8,
             "messages": messages
@@ -702,6 +703,18 @@ class ChatApp:
                     console.print(f"Error fetching Ollama models: {response.status} - {await response.text()}", style="bold red")
         return None
 
+    async def select_anthropic_model(self) -> str:
+        # For now, we only have one Anthropic model
+        return "claude-3-5-sonnet-20240620"
+
+    async def select_openai_model(self) -> str:
+        models = ["gpt-4o-mini", "gpt-4o"]
+        console.print("Available OpenAI models:", style="cyan")
+        for idx, model in enumerate(models):
+            console.print(f"{idx + 1}. {model}", style="green")
+        choice = Prompt.ask("Select a model number", choices=[str(i) for i in range(1, len(models) + 1)])
+        return models[int(choice) - 1]
+
     def save_last_chat_name(self, chat_name: str):
         set_key(ENV_FILE, LAST_CHAT_NAME_KEY, chat_name)
 
@@ -787,11 +800,13 @@ class ChatApp:
             elif mode == '2':
                 if not self.ensure_api_key('anthropic_api_key', ANTHROPIC_API_KEY_NAME):
                     return
-                self.current_session = self.provider_factory.create_provider('Anthropic', self.anthropic_api_key, "https://api.anthropic.com/v1/messages", self.history_manager)
+                selected_model = await self.select_anthropic_model()
+                self.current_session = self.provider_factory.create_provider('Anthropic', self.anthropic_api_key, "https://api.anthropic.com/v1/messages", self.history_manager, selected_model)
             elif mode == '3':
                 if not self.ensure_api_key('openai_api_key', OPENAI_API_KEY_NAME):
                     return
-                self.current_session = self.provider_factory.create_provider('OpenAI', self.openai_api_key, "https://api.openai.com/v1/chat/completions", "gpt-4o-mini", self.history_manager)
+                selected_model = await self.select_openai_model()
+                self.current_session = self.provider_factory.create_provider('OpenAI', self.openai_api_key, "https://api.openai.com/v1/chat/completions", selected_model, self.history_manager)
 
             self.current_session.display_history()
 
