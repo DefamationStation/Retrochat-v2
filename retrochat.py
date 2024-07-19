@@ -791,7 +791,7 @@ class ChatApp:
             elif mode == '3':
                 if not self.ensure_api_key('openai_api_key', OPENAI_API_KEY_NAME):
                     return
-                self.current_session = self.provider_factory.create_provider('OpenAI', self.openai_api_key, "https://api.openai.com/v1/chat/completions", "gpt-4", self.history_manager)
+                self.current_session = self.provider_factory.create_provider('OpenAI', self.openai_api_key, "https://api.openai.com/v1/chat/completions", "gpt-4o-mini", self.history_manager)
 
             self.current_session.display_history()
 
