@@ -1,5 +1,6 @@
-aiohttp==3.8.5
-requests==2.31.0
-prompt_toolkit==3.0.39
-rich==13.5.2
-python-dotenv==1.0.0
+asyncio
+aiohttp
+requests
+prompt_toolkit
+rich
+python-dotenv
