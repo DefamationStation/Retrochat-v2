@@ -259,12 +259,16 @@ class ChatHistoryManager:
         cursor = self.conn.cursor()
         cursor.execute('SELECT chat_name FROM chat_sessions')
         return [row[0] for row in cursor.fetchall()]
-
 class ChatProvider(ABC):
     def __init__(self, history_manager: ChatHistoryManager):
         self.history_manager = history_manager
         self.chat_history = self.load_history()
         self.system_message = self.history_manager.load_system_message()
+        self.parameters = self.history_manager.load_parameters()
+        self.default_parameters = {
+            "temperature": 0.8,
+            "max_tokens": 8192,
+        }
 
     def load_history(self) -> List[ChatMessage]:
         try:
@@ -309,22 +313,39 @@ class ChatProvider(ABC):
         formatted_message = '\n\n'.join(paragraphs)
         return formatted_message
 
+    def set_parameter(self, param: str, value: Any):
+        if param in self.default_parameters:
+            if param == "max_tokens":
+                value = int(value)
+            elif param == "temperature":
+                value = float(value)
+            self.parameters[param] = value
+            self.history_manager.save_parameters(self.parameters)
+            console.print(f"Parameter '{param}' set to {value}", style="cyan")
+        else:
+            console.print(f"Invalid parameter: {param}", style="bold red")
+
+    def show_parameters(self):
+        console.print("Current Parameters:", style="cyan")
+        for param, default_value in self.default_parameters.items():
+            current_value = self.parameters.get(param, default_value)
+            console.print(f"{param}: {current_value}", style="green")
+        console.print(f"system: {self.system_message if self.system_message else 'Not set'}", style="green")
+
 class OllamaChatSession(ChatProvider):
     def __init__(self, model_url: str, model: str, history_manager: ChatHistoryManager):
         super().__init__(history_manager)
         self.model_url = model_url
         self.model = model
-        self.parameters = self.history_manager.load_parameters()
-        self.default_parameters = {
+        self.default_parameters.update({
             "num_predict": 128,
             "top_k": 40,
             "top_p": 0.95,
-            "temperature": 0.8,
             "repeat_penalty": 0.95,
             "repeat_last_n": 64,
             "num_ctx": 8192,
             "stop": None,
-        }
+        })
 
     async def send_message(self, message: str):
         self.add_to_history("user", message)
@@ -375,27 +396,6 @@ class OllamaChatSession(ChatProvider):
         else:
             console.print(f"Invalid parameter: {param}", style="bold red")
 
-    def show_parameters(self):
-        console.print("Current Parameters:", style="cyan")
-        for param, default_value in self.default_parameters.items():
-            current_value = self.parameters.get(param, default_value)
-            console.print(f"{param}: {current_value}", style="green")
-        console.print(f"system: {self.system_message if self.system_message else 'Not set'}", style="green")
-
-    def get_parameter_description(self, param: str) -> str:
-        descriptions = {
-            "num_predict": "Max number of tokens to predict",
-            "top_k": "Pick from top k num of tokens",
-            "top_p": "Nucleus sampling probability threshold",
-            "temperature": "Temperature for sampling",
-            "repeat_penalty": "Repetition penalty for sampling",
-            "repeat_last_n": "Last n tokens to consider for repetition penalty",
-            "num_ctx": "Context window size",
-            "stop": "Stop sequences for text generation",
-            "system": "System message for chat",
-        }
-        return descriptions.get(param, "")
-
 class AnthropicChatSession(ChatProvider):
     def __init__(self, api_key: str, model_url: str, history_manager: ChatHistoryManager, model: str):
         super().__init__(history_manager)
@@ -409,8 +409,8 @@ class AnthropicChatSession(ChatProvider):
         
         data = {
             "model": self.model,
-            "max_tokens": 8192,
-            "temperature": 0.8,
+            "max_tokens": self.parameters.get("max_tokens", 8192),
+            "temperature": self.parameters.get("temperature", 0.8),
             "messages": messages
         }
 
@@ -468,6 +468,8 @@ class OpenAIChatSession(ChatProvider):
         data = {
             "model": self.model,
             "messages": messages,
+            "temperature": self.parameters.get("temperature", 0.8),
+            "max_tokens": self.parameters.get("max_tokens", 8192),
             "stream": True
         }
         headers = {
@@ -534,13 +536,10 @@ class CommandHandler:
         elif cmd == '/set':
             if args[0] == 'system':
                 self.handle_set_system(args[1], session)
-            elif isinstance(session, OllamaChatSession):
-                if not args[0]:
-                    session.show_parameters()
-                else:
-                    self.handle_set(args[0], args[1], session)
+            elif not args[0]:
+                session.show_parameters()
             else:
-                console.print("The /set command is only available for Ollama sessions, except for /set system.", style="bold red")
+                self.handle_set(args[0], args[1], session)
         elif cmd == '/edit':
             try:
                 await self.chat_app.edit_conversation(session)
@@ -552,7 +551,7 @@ class CommandHandler:
         else:
             console.print("Unknown command. Type /help for available commands.", style="bold red")
 
-    def handle_set(self, param: str, value: str, session: OllamaChatSession):
+    def handle_set(self, param: str, value: str, session: ChatProvider):
         if not param:
             session.show_parameters()
         else:
@@ -603,8 +602,7 @@ class CommandHandler:
                 self.history_manager.set_chat_name(chat_name)
                 session.chat_history = self.history_manager.load_history()
                 session.system_message = self.history_manager.load_system_message()
-                if isinstance(session, OllamaChatSession):
-                    session.parameters = self.history_manager.load_parameters()
+                session.parameters = self.history_manager.load_parameters()
                 console.print(f"Chat '{chat_name}' opened.", style="cyan")
                 session.display_history()
                 self.chat_app.save_last_chat_name(chat_name)
@@ -622,8 +620,8 @@ class CommandHandler:
         console.print("/chat list - List all available chats", style="green")
         console.print("/chat open <chat_name> - Open a specific chat", style="green")
         console.print("/set system <message> - Set the system message", style="green")
-        console.print("/set - Show available parameters and their current values (Ollama only)", style="green")
-        console.print("/set <parameter> <value> - Set a parameter (Ollama only)", style="green")
+        console.print("/set - Show available parameters and their current values", style="green")
+        console.print("/set <parameter> <value> - Set a parameter", style="green")
         console.print("/edit - Edit the entire conversation", style="green")
         console.print("/help - Display this help message", style="green")
         console.print("/exit - Exit the program", style="green")
