@@ -10,7 +10,6 @@ import json
 import logging
 import tempfile
 import subprocess
-import hashlib
 from dataclasses import dataclass, asdict
 from typing import List, Optional, Dict, Any
 from prompt_toolkit import PromptSession
@@ -786,10 +785,6 @@ class ChatApp:
             # Check for setup
             check_and_setup()
             
-            # Check for updates
-            if check_for_updates():
-                sys.exit(0)  # Exit if updated
-            
             console.print("Select the mode:\n1. Ollama\n2. Anthropic\n3. OpenAI", style="cyan")
 
             mode = Prompt.ask("Enter your choice", choices=["1", "2", "3"])
@@ -862,57 +857,10 @@ class ChatApp:
         
         return '\n'.join(lines)
 
-def check_for_updates():
-    repo_owner = "DefamationStation"
-    repo_name = "Retrochat-v2"
-    file_path = "retrochat.py"  # The path to this script in your repo
-
-    # Get the latest commit hash
-    url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/commits?path={file_path}&page=1&per_page=1"
-    response = requests.get(url)
-    if response.status_code != 200:
-        console.print(f"Failed to check for updates: {response.status_code}", style="bold red")
-        return False
-
-    latest_commit = response.json()[0]
-    latest_commit_hash = latest_commit['sha']
-
-    # Get the content of the file in the latest commit
-    url = f"https://raw.githubusercontent.com/{repo_owner}/{repo_name}/{latest_commit_hash}/{file_path}"
-    response = requests.get(url)
-    if response.status_code != 200:
-        console.print(f"Failed to fetch the latest version: {response.status_code}", style="bold red")
-        return False
-
-    latest_content = response.text
-
-    # Compare the content
-    with open(__file__, 'r') as f:
-        current_content = f.read()
-
-    if hashlib.sha256(current_content.encode()).hexdigest() != hashlib.sha256(latest_content.encode()).hexdigest():
-        console.print("An update is available.", style="bold yellow")
-        choice = Prompt.ask("Do you want to update?", choices=["1", "2"], default="2")
-        
-        if choice == "1":
-            console.print("Updating...", style="cyan")
-            with open(__file__, 'w') as f:
-                f.write(latest_content)
-            console.print("Update complete. Please restart the script.", style="bold green")
-            return True
-        else:
-            console.print("Update skipped. Running current version.", style="yellow")
-            return False
-    else:
-        console.print("You're running the latest version.", style="green")
-        return False
-
 async def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--setup":
         setup_rchat()
     else:
-        if check_for_updates():
-            sys.exit(0)  # Exit if updated
         app = ChatApp()
         await app.start()
 
