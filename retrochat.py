@@ -542,7 +542,11 @@ class CommandHandler:
             else:
                 console.print("The /set command is only available for Ollama sessions, except for /set system.", style="bold red")
         elif cmd == '/edit':
-            await self.chat_app.edit_conversation(session)
+            try:
+                await self.chat_app.edit_conversation(session)
+            except Exception as e:
+                console.print(f"An error occurred while editing the conversation: {str(e)}", style="bold red")
+                console.print("Your original conversation has not been modified.", style="yellow")
         elif cmd == '/help':
             self.display_help()
         else:
@@ -726,7 +730,7 @@ class ChatApp:
             chat_text += f"{msg.role.upper()}:\n{msg.content}\n\n"
 
         # Create a temporary file with the chat history
-        with tempfile.NamedTemporaryFile(mode='w+', suffix='.txt', delete=False) as temp_file:
+        with tempfile.NamedTemporaryFile(mode='w+', suffix='.txt', delete=False, encoding='utf-8') as temp_file:
             temp_file.write(chat_text)
             temp_file_path = temp_file.name
 
@@ -748,8 +752,13 @@ class ChatApp:
             input()
 
         # Read the edited content
-        with open(temp_file_path, 'r') as file:
-            edited_content = file.read()
+        try:
+            with open(temp_file_path, 'r', encoding='utf-8') as file:
+                edited_content = file.read()
+        except UnicodeDecodeError:
+            # If UTF-8 fails, try with the system's default encoding
+            with open(temp_file_path, 'r') as file:
+                edited_content = file.read()
 
         # Remove the temporary file
         os.unlink(temp_file_path)
