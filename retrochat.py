@@ -899,8 +899,9 @@ def check_for_updates():
 
     if hashlib.sha256(current_content.encode()).hexdigest() != hashlib.sha256(latest_content.encode()).hexdigest():
         console.print("An update is available.", style="bold yellow")
-        choice = Prompt.ask("Do you want to update?\n\n1. Yes\n2. No", choices=["1", "2"], default="2")
-        
+        console.print("Do you want to update?\n\n1. Yes\n2. No")
+        choice = Prompt.ask("", choices=["1", "2"])
+
         if choice == "1":
             console.print("Updating...", style="cyan")
             with open(__file__, 'w') as f:
