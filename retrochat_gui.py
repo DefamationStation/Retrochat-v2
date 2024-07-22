@@ -13,6 +13,7 @@ import subprocess
 import hashlib
 import traceback
 import qasync
+from threading import Lock
 from qasync import QApplication, QEventLoop, asyncSlot
 from dataclasses import dataclass, asdict
 from typing import List, Optional, Dict, Any
@@ -67,7 +68,8 @@ class ChatHistoryManager:
     def __init__(self, db_file: str, chat_name: str = 'default'):
         self.db_file = db_file
         self.chat_name = chat_name
-        self.conn = sqlite3.connect(self.db_file)
+        self.conn = sqlite3.connect(self.db_file, check_same_thread=False)
+        self.lock = Lock()
         self._create_tables()
         self._update_schema()
 
@@ -121,11 +123,12 @@ class ChatHistoryManager:
     def save_history(self, history: List[ChatMessage]):
         session_id = self._get_session_id(self.chat_name)
         try:
-            with self.conn:
-                self.conn.execute('DELETE FROM chat_messages WHERE session_id = ?', (session_id,))
-                self.conn.executemany('''
-                    INSERT INTO chat_messages (session_id, role, content) VALUES (?, ?, ?)
-                ''', [(session_id, msg.role, msg.content) for msg in history])
+            with self.lock:
+                with self.conn:
+                    self.conn.execute('DELETE FROM chat_messages WHERE session_id = ?', (session_id,))
+                    self.conn.executemany('''
+                        INSERT INTO chat_messages (session_id, role, content) VALUES (?, ?, ?)
+                    ''', [(session_id, msg.role, msg.content) for msg in history])
         except Exception as e:
             logger.error(f"Error saving chat history: {e}")
 
@@ -601,16 +604,16 @@ class RetrochatGUI(QMainWindow):
         if message and self.current_session:
             self.chat_display.append(f"<b>You:</b> {message}")
             self.chat_input.clear()
-            worker = Worker(self.process_message, message)
+            worker = Worker(asyncio.run, self.process_message(message))
             worker.signals.result.connect(self.update_chat_display)
             worker.signals.error.connect(self.handle_error)
             self.threadpool.start(worker)
 
-    def process_message(self, message):
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        response = loop.run_until_complete(self.current_session.send_message(message))
-        return "".join(response)
+    async def process_message(self, message):
+        response = ""
+        async for chunk in self.current_session.send_message(message):
+            response += chunk
+        return response
 
     def update_chat_display(self, response):
         self.chat_display.append(f"<b>AI:</b> {response}")
