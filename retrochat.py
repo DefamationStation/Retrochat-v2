@@ -681,8 +681,6 @@ class ChatApp:
         self.ollama_ip = None
         self.ollama_port = None
         self.current_session = None
-        self.last_commit_message = None
-        self.updated = False
 
         self.load_env_variables()
         self.save_last_chat_name(self.chat_name)
@@ -695,8 +693,6 @@ class ChatApp:
             self.chat_name = os.getenv(LAST_CHAT_NAME_KEY, 'default')
             self.ollama_ip = os.getenv(OLLAMA_IP_KEY, 'localhost')
             self.ollama_port = os.getenv(OLLAMA_PORT_KEY, '11434')
-            self.last_commit_message = os.getenv("LAST_COMMIT_MESSAGE")
-            self.updated = os.getenv("UPDATED", "false").lower() == "true"
             self.history_manager.set_chat_name(self.chat_name)
 
     def display_update_message(self):
@@ -856,12 +852,6 @@ class ChatApp:
             if check_for_updates():
                 return  # Exit if updated
 
-            # Reload env variables to get the latest commit message
-            self.load_env_variables()
-
-            # Display update message
-            self.display_update_message()
-
             console.print("Select the mode:\n1. Ollama\n2. Anthropic\n3. OpenAI", style="cyan")
 
             mode = Prompt.ask("Enter your choice", choices=["1", "2", "3"])
@@ -962,15 +952,15 @@ def check_for_updates():
 
     if hashlib.sha256(current_content.encode()).hexdigest() != hashlib.sha256(latest_content.encode()).hexdigest():
         console.print("An update is available.", style="bold yellow")
-        console.print("Do you want to update?\n\n1. Yes\n2. No")
+        console.print("Latest commit message:", style="cyan")
+        console.print(latest_commit_message, style="yellow")
+        console.print("\nDo you want to update?\n\n1. Yes\n2. No")
         choice = Prompt.ask("", choices=["1", "2"])
 
         if choice == "1":
             console.print("Updating...", style="cyan")
             with open(__file__, 'w') as f:
                 f.write(latest_content)
-            set_key(ENV_FILE, "LAST_COMMIT_MESSAGE", latest_commit_message)
-            set_key(ENV_FILE, "UPDATED", "true")
             console.print("Update complete. Please restart the script.", style="bold green")
             return True
         else:
@@ -978,8 +968,6 @@ def check_for_updates():
             return False
     else:
         console.print("You're running the latest version.", style="green")
-        set_key(ENV_FILE, "LAST_COMMIT_MESSAGE", latest_commit_message)
-        set_key(ENV_FILE, "UPDATED", "false")
         return False
 
 async def main():

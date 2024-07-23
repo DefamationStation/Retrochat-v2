@@ -4,3 +4,4 @@ requests
 prompt_toolkit
 rich
 python-dotenv
+tiktoken
