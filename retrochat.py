@@ -23,6 +23,7 @@ from rich.console import Console
 from rich.prompt import Prompt
 from dotenv import load_dotenv, set_key
 import shutil
+import tiktoken
 
 # Constants
 USER_HOME = os.path.expanduser('~')
@@ -41,6 +42,9 @@ os.makedirs(RETROCHAT_DIR, exist_ok=True)
 
 # Initialize rich console
 console = Console()
+
+# Initialize tokenizer
+tokenizer = tiktoken.get_encoding("cl100k_base")
 
 # Self-setup functionality
 def setup_rchat():
@@ -259,6 +263,7 @@ class ChatHistoryManager:
         cursor = self.conn.cursor()
         cursor.execute('SELECT chat_name FROM chat_sessions')
         return [row[0] for row in cursor.fetchall()]
+
 class ChatProvider(ABC):
     def __init__(self, history_manager: ChatHistoryManager):
         self.history_manager = history_manager
@@ -268,6 +273,7 @@ class ChatProvider(ABC):
         self.default_parameters = {
             "temperature": 0.8,
             "max_tokens": 8192,
+            "verbose": False,
         }
 
     def load_history(self) -> List[ChatMessage]:
@@ -284,6 +290,11 @@ class ChatProvider(ABC):
     def add_to_history(self, role: str, content: str):
         self.chat_history.append(ChatMessage(role, content))
         self.save_history()
+        if self.parameters.get("verbose", False) and role == "user":
+            tokens = self.calculate_tokens(content)
+            total_tokens = self.calculate_total_tokens()
+            console.print(f"Message tokens: {tokens}", style="cyan")
+            console.print(f"Total conversation tokens: {total_tokens}", style="cyan")
 
     def save_history(self):
         try:
@@ -319,6 +330,8 @@ class ChatProvider(ABC):
                 value = int(value)
             elif param == "temperature":
                 value = float(value)
+            elif param == "verbose":
+                value = value.lower() == "true"
             self.parameters[param] = value
             self.history_manager.save_parameters(self.parameters)
             console.print(f"Parameter '{param}' set to {value}", style="cyan")
@@ -331,6 +344,17 @@ class ChatProvider(ABC):
             current_value = self.parameters.get(param, default_value)
             console.print(f"{param}: {current_value}", style="green")
         console.print(f"system: {self.system_message if self.system_message else 'Not set'}", style="green")
+
+    def calculate_tokens(self, text: str) -> int:
+        return len(tokenizer.encode(text))
+
+    def calculate_total_tokens(self) -> int:
+        total_tokens = 0
+        if self.system_message:
+            total_tokens += self.calculate_tokens(self.system_message)
+        for msg in self.chat_history:
+            total_tokens += self.calculate_tokens(msg.content)
+        return total_tokens
 
 class OllamaChatSession(ChatProvider):
     def __init__(self, model_url: str, model: str, history_manager: ChatHistoryManager):
@@ -376,7 +400,11 @@ class OllamaChatSession(ChatProvider):
                     console.print()
                     formatted_message = self.format_message(complete_message)
                     self.add_to_history("assistant", formatted_message)
-                    self.save_history()
+                    if self.parameters.get("verbose", False):
+                        tokens = self.calculate_tokens(formatted_message)
+                        total_tokens = self.calculate_total_tokens()
+                        console.print(f"Response tokens: {tokens}", style="cyan")
+                        console.print(f"Total conversation tokens: {total_tokens}", style="cyan")
                     return formatted_message
                 else:
                     console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
@@ -390,6 +418,8 @@ class OllamaChatSession(ChatProvider):
                 value = float(value)
             elif param == "stop":
                 value = value.split()  # Split into a list
+            elif param == "verbose":
+                value = value.lower() == "true"
             self.parameters[param] = value
             self.history_manager.save_parameters(self.parameters)
             console.print(f"Parameter '{param}' set to {value}", style="cyan")
@@ -431,8 +461,12 @@ class AnthropicChatSession(ChatProvider):
                     if assistant_message:
                         formatted_message = self.format_message(assistant_message)
                         self.add_to_history("assistant", formatted_message)
-                        self.save_history()
                         console.print(formatted_message, style="yellow")
+                        if self.parameters.get("verbose", False):
+                            tokens = self.calculate_tokens(formatted_message)
+                            total_tokens = self.calculate_total_tokens()
+                            console.print(f"Response tokens: {tokens}", style="cyan")
+                            console.print(f"Total conversation tokens: {total_tokens}", style="cyan")
                         return formatted_message
                     else:
                         console.print("No response content received.", style="bold red")
@@ -498,7 +532,11 @@ class OpenAIChatSession(ChatProvider):
                     console.print()
                     formatted_message = self.format_message(complete_message)
                     self.add_to_history("assistant", formatted_message)
-                    self.save_history()
+                    if self.parameters.get("verbose", False):
+                        tokens = self.calculate_tokens(formatted_message)
+                        total_tokens = self.calculate_total_tokens()
+                        console.print(f"Response tokens: {tokens}", style="cyan")
+                        console.print(f"Total conversation tokens: {total_tokens}", style="cyan")
                     return formatted_message
                 else:
                     console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
@@ -522,10 +560,13 @@ class CommandHandler:
         self.history_manager = history_manager
         self.chat_app = chat_app
 
+    async def handle_show_length(self, session: ChatProvider):
+        total_tokens = session.calculate_total_tokens()
+        console.print(f"Total conversation tokens: {total_tokens}", style="cyan")
+
     async def handle_command(self, command: str, session: ChatProvider):
         cmd_parts = command.split(maxsplit=2)
         cmd, *args = cmd_parts + ['', '']
-
         if cmd == '/chat':
             method_name = f"handle_{args[0]}"
             method = getattr(self, method_name, None)
@@ -546,6 +587,8 @@ class CommandHandler:
             except Exception as e:
                 console.print(f"An error occurred while editing the conversation: {str(e)}", style="bold red")
                 console.print("Your original conversation has not been modified.", style="yellow")
+        elif cmd == '/show' and args[0] == 'length':
+            await self.handle_show_length(session)
         elif cmd == '/help':
             self.display_help()
         else:
@@ -623,6 +666,7 @@ class CommandHandler:
         console.print("/set - Show available parameters and their current values", style="green")
         console.print("/set <parameter> <value> - Set a parameter", style="green")
         console.print("/edit - Edit the entire conversation", style="green")
+        console.print("/show length - Display the total conversation tokens", style="green")
         console.print("/help - Display this help message", style="green")
         console.print("/exit - Exit the program", style="green")
 
@@ -637,6 +681,8 @@ class ChatApp:
         self.ollama_ip = None
         self.ollama_port = None
         self.current_session = None
+        self.last_commit_message = None
+        self.updated = False
 
         self.load_env_variables()
         self.save_last_chat_name(self.chat_name)
@@ -649,7 +695,20 @@ class ChatApp:
             self.chat_name = os.getenv(LAST_CHAT_NAME_KEY, 'default')
             self.ollama_ip = os.getenv(OLLAMA_IP_KEY, 'localhost')
             self.ollama_port = os.getenv(OLLAMA_PORT_KEY, '11434')
+            self.last_commit_message = os.getenv("LAST_COMMIT_MESSAGE")
+            self.updated = os.getenv("UPDATED", "false").lower() == "true"
             self.history_manager.set_chat_name(self.chat_name)
+
+    def display_update_message(self):
+        if self.updated and self.last_commit_message:
+            console.print("Last update message:", style="bold cyan")
+            console.print(self.last_commit_message, style="yellow")
+            # Reset the updated status
+            set_key(ENV_FILE, "UPDATED", "false")
+            self.updated = False
+        elif self.last_commit_message:
+            console.print("Latest commit message:", style="bold cyan")
+            console.print(self.last_commit_message, style="yellow")
 
     def ensure_api_key(self, key_name: str, env_var: str):
         if not getattr(self, key_name):
@@ -795,8 +854,14 @@ class ChatApp:
             
             # Check for updates
             if check_for_updates():
-                sys.exit(0)  # Exit if updated
-            
+                return  # Exit if updated
+
+            # Reload env variables to get the latest commit message
+            self.load_env_variables()
+
+            # Display update message
+            self.display_update_message()
+
             console.print("Select the mode:\n1. Ollama\n2. Anthropic\n3. OpenAI", style="cyan")
 
             mode = Prompt.ask("Enter your choice", choices=["1", "2", "3"])
@@ -872,9 +937,8 @@ class ChatApp:
 def check_for_updates():
     repo_owner = "DefamationStation"
     repo_name = "Retrochat-v2"
-    file_path = "retrochat.py"  # The path to this script in your repo
+    file_path = "retrochat.py"
 
-    # Get the latest commit hash
     url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/commits?path={file_path}&page=1&per_page=1"
     response = requests.get(url)
     if response.status_code != 200:
@@ -883,8 +947,8 @@ def check_for_updates():
 
     latest_commit = response.json()[0]
     latest_commit_hash = latest_commit['sha']
+    latest_commit_message = latest_commit['commit']['message']
 
-    # Get the content of the file in the latest commit
     url = f"https://raw.githubusercontent.com/{repo_owner}/{repo_name}/{latest_commit_hash}/{file_path}"
     response = requests.get(url)
     if response.status_code != 200:
@@ -893,7 +957,6 @@ def check_for_updates():
 
     latest_content = response.text
 
-    # Compare the content
     with open(__file__, 'r') as f:
         current_content = f.read()
 
@@ -906,6 +969,8 @@ def check_for_updates():
             console.print("Updating...", style="cyan")
             with open(__file__, 'w') as f:
                 f.write(latest_content)
+            set_key(ENV_FILE, "LAST_COMMIT_MESSAGE", latest_commit_message)
+            set_key(ENV_FILE, "UPDATED", "true")
             console.print("Update complete. Please restart the script.", style="bold green")
             return True
         else:
@@ -913,14 +978,14 @@ def check_for_updates():
             return False
     else:
         console.print("You're running the latest version.", style="green")
+        set_key(ENV_FILE, "LAST_COMMIT_MESSAGE", latest_commit_message)
+        set_key(ENV_FILE, "UPDATED", "false")
         return False
 
 async def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--setup":
         setup_rchat()
     else:
-        if check_for_updates():
-            sys.exit(0)  # Exit if updated
         app = ChatApp()
         await app.start()
 
