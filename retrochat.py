@@ -685,6 +685,7 @@ class ChatApp:
         self.load_env_variables()
         self.save_last_chat_name(self.chat_name)
 
+
     def load_env_variables(self):
         if os.path.exists(ENV_FILE):
             load_dotenv(ENV_FILE)
@@ -693,6 +694,8 @@ class ChatApp:
             self.chat_name = os.getenv(LAST_CHAT_NAME_KEY, 'default')
             self.ollama_ip = os.getenv(OLLAMA_IP_KEY, 'localhost')
             self.ollama_port = os.getenv(OLLAMA_PORT_KEY, '11434')
+            self.last_commit_message = os.getenv("LAST_COMMIT_MESSAGE")
+            self.updated = os.getenv("UPDATED", "false").lower() == "true"
             self.history_manager.set_chat_name(self.chat_name)
 
     def display_update_message(self):
@@ -875,6 +878,12 @@ class ChatApp:
                 selected_model = await self.select_openai_model()
                 self.current_session = self.provider_factory.create_provider('OpenAI', self.openai_api_key, "https://api.openai.com/v1/chat/completions", selected_model, self.history_manager)
 
+            # Apply saved parameters
+            if self.current_session:
+                saved_params = self.history_manager.load_parameters()
+                for param, value in saved_params.items():
+                    self.current_session.set_parameter(param, value)
+
             self.current_session.display_history()
 
             while True:
@@ -898,7 +907,7 @@ class ChatApp:
             console.print(f"\nAn unexpected error occurred: {e}", style="bold red")
         finally:
             if self.current_session:
-                self.current_session.save_history()  # Ensure history is saved when exiting
+                self.current_session.save_history()
 
     async def get_multiline_input(self) -> str:
         lines = []
@@ -952,15 +961,15 @@ def check_for_updates():
 
     if hashlib.sha256(current_content.encode()).hexdigest() != hashlib.sha256(latest_content.encode()).hexdigest():
         console.print("An update is available.", style="bold yellow")
-        console.print("Latest commit message:", style="cyan")
-        console.print(latest_commit_message, style="yellow")
-        console.print("\nDo you want to update?\n\n1. Yes\n2. No")
+        console.print("Do you want to update?\n\n1. Yes\n2. No")
         choice = Prompt.ask("", choices=["1", "2"])
 
         if choice == "1":
             console.print("Updating...", style="cyan")
             with open(__file__, 'w') as f:
                 f.write(latest_content)
+            set_key(ENV_FILE, "LAST_COMMIT_MESSAGE", latest_commit_message)
+            set_key(ENV_FILE, "UPDATED", "true")
             console.print("Update complete. Please restart the script.", style="bold green")
             return True
         else:
@@ -968,6 +977,8 @@ def check_for_updates():
             return False
     else:
         console.print("You're running the latest version.", style="green")
+        set_key(ENV_FILE, "LAST_COMMIT_MESSAGE", latest_commit_message)
+        set_key(ENV_FILE, "UPDATED", "false")
         return False
 
 async def main():
