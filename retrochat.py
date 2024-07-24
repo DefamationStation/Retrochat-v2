@@ -328,10 +328,14 @@ class ChatProvider(ABC):
         if param in self.default_parameters:
             if param == "max_tokens":
                 value = int(value)
-            elif param == "temperature":
+            elif param in ["temperature", "top_p", "repeat_penalty"]:
                 value = float(value)
             elif param == "verbose":
-                value = value.lower() == "true"
+                value = str(value).lower() == "true"
+            elif param in ["num_predict", "top_k", "repeat_last_n", "num_ctx"]:
+                value = int(value)
+            elif param == "stop":
+                value = value.split() if isinstance(value, str) else value
             self.parameters[param] = value
             self.history_manager.save_parameters(self.parameters)
             console.print(f"Parameter '{param}' set to {value}", style="cyan")
