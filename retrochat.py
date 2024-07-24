@@ -685,10 +685,11 @@ class ChatApp:
         self.ollama_ip = None
         self.ollama_port = None
         self.current_session = None
+        self.last_commit_message = None
+        self.updated = False
 
         self.load_env_variables()
         self.save_last_chat_name(self.chat_name)
-
 
     def load_env_variables(self):
         if os.path.exists(ENV_FILE):
