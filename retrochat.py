@@ -419,9 +419,9 @@ class OllamaChatSession(ChatProvider):
             elif param in ["top_p", "temperature", "repeat_penalty"]:
                 value = float(value)
             elif param == "stop":
-                value = value.split()  # Split into a list
+                value = value.split() if isinstance(value, str) else value
             elif param == "verbose":
-                value = value.lower() == "true"
+                value = str(value).lower() == "true"
             self.parameters[param] = value
             self.history_manager.save_parameters(self.parameters)
             console.print(f"Parameter '{param}' set to {value}", style="cyan")
