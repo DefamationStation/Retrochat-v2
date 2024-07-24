@@ -344,7 +344,8 @@ class ChatProvider(ABC):
         console.print("Current Parameters:", style="cyan")
         for param, default_value in self.default_parameters.items():
             current_value = self.parameters.get(param, default_value)
-            console.print(f"{param}: {current_value}", style="green")
+            if param != "verbose" or current_value:
+                console.print(f"{param}: {current_value}", style="green")
         console.print(f"system: {self.system_message if self.system_message else 'Not set'}", style="green")
 
     def calculate_tokens(self, text: str) -> int:
@@ -422,9 +423,12 @@ class OllamaChatSession(ChatProvider):
                 value = value.split() if isinstance(value, str) else value
             elif param == "verbose":
                 value = str(value).lower() == "true"
+            
             self.parameters[param] = value
             self.history_manager.save_parameters(self.parameters)
-            console.print(f"Parameter '{param}' set to {value}", style="cyan")
+            
+            if param != "verbose" or value:
+                console.print(f"Parameter '{param}' set to {value}", style="cyan")
         else:
             console.print(f"Invalid parameter: {param}", style="bold red")
 
