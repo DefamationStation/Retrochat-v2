@@ -274,7 +274,7 @@ class ChatProvider(ABC):
             "temperature": 0.8,
             "max_tokens": 8192,
             "verbose": False,
-            "frequency_penalty": 0.95,
+            "frequency_penalty": 1.1,
         }
 
     def load_history(self) -> List[ChatMessage]:
@@ -329,16 +329,12 @@ class ChatProvider(ABC):
         if param in self.default_parameters or param == "repeat_penalty":  # Allow repeat_penalty
             if param in ["num_predict", "top_k", "repeat_last_n", "num_ctx"]:
                 value = int(value)
-            elif param in ["top_p", "temperature", "repeat_penalty", "frequency_penalty"]:
+            elif param in ["top_p", "temperature", "repeat_penalty"]:
                 value = float(value)
             elif param == "stop":
                 value = value.split() if isinstance(value, str) else value
             elif param == "verbose":
                 value = str(value).lower() == "true"
-            
-            # Map repeat_penalty to frequency_penalty for OpenAI
-            if param == "repeat_penalty" and isinstance(self, OpenAIChatSession):
-                param = "frequency_penalty"
             
             self.parameters[param] = value
             self.history_manager.save_parameters(self.parameters)
@@ -376,11 +372,36 @@ class OllamaChatSession(ChatProvider):
             "num_predict": 128,
             "top_k": 40,
             "top_p": 0.95,
-            "repeat_penalty": 0.95,
+            "repeat_penalty": 1.1,
             "repeat_last_n": 64,
             "num_ctx": 8192,
             "stop": None,
         })
+    
+    def set_parameter(self, param: str, value: Any):
+        if param in self.default_parameters or param == "repeat_penalty":
+            if param in ["num_predict", "top_k", "repeat_last_n", "num_ctx"]:
+                value = int(value)
+            elif param in ["top_p", "temperature", "repeat_penalty"]:
+                value = float(value)
+            elif param == "stop":
+                value = value.split() if isinstance(value, str) else value
+            elif param == "verbose":
+                value = str(value).lower() == "true"
+            
+            if param == "repeat_penalty":
+                self.parameters["repeat_penalty"] = value
+                if isinstance(self, OpenAIChatSession):
+                    self.parameters["frequency_penalty"] = value
+            else:
+                self.parameters[param] = value
+            
+            self.history_manager.save_parameters(self.parameters)
+            
+            if param != "verbose" or value:
+                console.print(f"Parameter '{param}' set to {value}", style="cyan")
+        else:
+            console.print(f"Invalid parameter: {param}", style="bold red")
 
     async def send_message(self, message: str):
         self.add_to_history("user", message)
@@ -510,7 +531,7 @@ class OpenAIChatSession(ChatProvider):
         self.base_url = base_url
         self.model = model
         self.default_parameters.update({
-            "frequency_penalty": 0.95,
+            "frequency_penalty": 1.1,
         })
 
     async def send_message(self, message: str):
@@ -612,6 +633,8 @@ class CommandHandler:
                 console.print("Your original conversation has not been modified.", style="yellow")
         elif cmd == '/show' and args[0] == 'length':
             await self.handle_show_length(session)
+        elif cmd == '/switch':
+            return await self.handle_switch(args[0], session)
         elif cmd == '/help':
             self.display_help()
         else:
@@ -677,6 +700,12 @@ class CommandHandler:
         else:
             console.print("Please provide the name of the chat to open. Usage: /chat open <chat_name>", style="bold red")
 
+    async def handle_switch(self, _, session: ChatProvider):
+        new_session = await self.chat_app.switch_provider()
+        if new_session:
+            return new_session
+        return session
+
     def display_help(self):
         console.print("Available commands:", style="cyan")
         console.print("/chat rename <new_name> - Rename the current chat", style="green")
@@ -690,6 +719,7 @@ class CommandHandler:
         console.print("/set <parameter> <value> - Set a parameter", style="green")
         console.print("/edit - Edit the entire conversation", style="green")
         console.print("/show length - Display the total conversation tokens", style="green")
+        console.print("/switch - Switch to a different provider or model", style="green")
         console.print("/help - Display this help message", style="green")
         console.print("/exit - Exit the program", style="green")
 
@@ -869,6 +899,45 @@ class ChatApp:
         console.print("Chat history updated successfully.", style="cyan")
         session.display_history()
 
+    async def switch_provider(self):
+        console.print("Select the mode:\n1. Ollama\n2. Anthropic\n3. OpenAI", style="cyan")
+        mode = Prompt.ask("Enter your choice", choices=["1", "2", "3"])
+
+        if mode == '1':
+            if not self.ensure_ollama_connection():
+                return None
+            selected_model = await self.select_ollama_model()
+            if not selected_model:
+                return None
+            model_url = f"http://{self.ollama_ip}:{self.ollama_port}/api/chat"
+            new_session = self.provider_factory.create_provider('Ollama', model_url, selected_model, self.history_manager)
+        elif mode == '2':
+            if not self.ensure_api_key('anthropic_api_key', ANTHROPIC_API_KEY_NAME):
+                return None
+            selected_model = await self.select_anthropic_model()
+            new_session = self.provider_factory.create_provider('Anthropic', self.anthropic_api_key, "https://api.anthropic.com/v1/messages", self.history_manager, selected_model)
+        elif mode == '3':
+            if not self.ensure_api_key('openai_api_key', OPENAI_API_KEY_NAME):
+                return None
+            selected_model = await self.select_openai_model()
+            new_session = self.provider_factory.create_provider('OpenAI', self.openai_api_key, "https://api.openai.com/v1/chat/completions", selected_model, self.history_manager)
+
+        if new_session:
+            saved_params = self.history_manager.load_parameters()
+            for param, value in saved_params.items():
+                if param == "repeat_penalty":
+                    new_session.set_parameter("repeat_penalty", value)
+                elif param != "frequency_penalty":
+                    new_session.set_parameter(param, value)
+            if self.current_session:
+                new_session.chat_history = self.current_session.chat_history
+                new_session.system_message = self.current_session.system_message
+            else:
+                new_session.chat_history = []
+                new_session.system_message = None
+            return new_session
+        return None
+
     async def start(self):
         try:
             console.clear()
@@ -881,34 +950,9 @@ class ChatApp:
             if check_for_updates():
                 return  # Exit if updated
 
-            console.print("Select the mode:\n1. Ollama\n2. Anthropic\n3. OpenAI", style="cyan")
-
-            mode = Prompt.ask("Enter your choice", choices=["1", "2", "3"])
-
-            if mode == '1':
-                if not self.ensure_ollama_connection():
-                    return
-                selected_model = await self.select_ollama_model()
-                if not selected_model:
-                    return
-                model_url = f"http://{self.ollama_ip}:{self.ollama_port}/api/chat"
-                self.current_session = self.provider_factory.create_provider('Ollama', model_url, selected_model, self.history_manager)
-            elif mode == '2':
-                if not self.ensure_api_key('anthropic_api_key', ANTHROPIC_API_KEY_NAME):
-                    return
-                selected_model = await self.select_anthropic_model()
-                self.current_session = self.provider_factory.create_provider('Anthropic', self.anthropic_api_key, "https://api.anthropic.com/v1/messages", self.history_manager, selected_model)
-            elif mode == '3':
-                if not self.ensure_api_key('openai_api_key', OPENAI_API_KEY_NAME):
-                    return
-                selected_model = await self.select_openai_model()
-                self.current_session = self.provider_factory.create_provider('OpenAI', self.openai_api_key, "https://api.openai.com/v1/chat/completions", selected_model, self.history_manager)
-
-            # Apply saved parameters
-            if self.current_session:
-                saved_params = self.history_manager.load_parameters()
-                for param, value in saved_params.items():
-                    self.current_session.set_parameter(param, value)
+            self.current_session = await self.switch_provider()
+            if not self.current_session:
+                return
 
             self.current_session.display_history()
 
@@ -920,7 +964,9 @@ class ChatApp:
                         console.print("Thank you for chatting. Goodbye!", style="cyan")
                         break
                     elif user_input.startswith('/'):
-                        await self.command_handler.handle_command(user_input, self.current_session)
+                        result = await self.command_handler.handle_command(user_input, self.current_session)
+                        if isinstance(result, ChatProvider):
+                            self.current_session = result
                     elif user_input:  # Only send non-empty messages
                         await self.current_session.send_message(user_input)
                         self.current_session.save_history()  # Save history after each message
