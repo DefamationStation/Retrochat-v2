@@ -969,8 +969,12 @@ class SettingsDialog(QDialog):
         self.num_ctx_input = QLineEdit(str(self.chat_provider.parameters.get("num_ctx", 8192)))
         layout.addRow("Num CTX:", self.num_ctx_input)
 
-        self.repeat_penalty_input = QLineEdit(str(self.chat_provider.parameters.get("repeat_penalty", 0.95)))
-        layout.addRow("Repeat Penalty:", self.repeat_penalty_input)
+        if isinstance(self.chat_provider, OpenAIChatSession):
+            self.frequency_penalty_input = QLineEdit(str(self.chat_provider.parameters.get("frequency_penalty", 0.0)))
+            layout.addRow("Frequency Penalty:", self.frequency_penalty_input)
+        else:
+            self.repeat_penalty_input = QLineEdit(str(self.chat_provider.parameters.get("repeat_penalty", 0.95)))
+            layout.addRow("Repeat Penalty:", self.repeat_penalty_input)
 
         self.max_tokens_input = QLineEdit(str(self.chat_provider.parameters.get("max_tokens", 8192)))
         layout.addRow("Max Tokens:", self.max_tokens_input)
@@ -994,7 +998,10 @@ class SettingsDialog(QDialog):
 
             self.chat_provider.set_parameter("temperature", float(self.temperature_input.text()))
             self.chat_provider.set_parameter("num_ctx", int(self.num_ctx_input.text()))
-            self.chat_provider.set_parameter("repeat_penalty", float(self.repeat_penalty_input.text()))
+            if isinstance(self.chat_provider, OpenAIChatSession):
+                self.chat_provider.set_parameter("frequency_penalty", float(self.frequency_penalty_input.text()))
+            else:
+                self.chat_provider.set_parameter("repeat_penalty", float(self.repeat_penalty_input.text()))
             self.chat_provider.set_parameter("max_tokens", int(self.max_tokens_input.text()))
             self.chat_provider.set_parameter("num_predict", int(self.num_predict_input.text()))
             self.chat_provider.set_parameter("top_k", int(self.top_k_input.text()))

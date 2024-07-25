@@ -510,6 +510,7 @@ class OpenAIChatSession(ChatProvider):
             "messages": messages,
             "temperature": self.parameters.get("temperature", 0.8),
             "max_tokens": self.parameters.get("max_tokens", 8192),
+            "frequency_penalty": self.parameters.get("frequency_penalty", 0.0),
             "stream": True
         }
         headers = {
