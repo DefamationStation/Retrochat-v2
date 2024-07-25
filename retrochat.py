@@ -274,6 +274,7 @@ class ChatProvider(ABC):
             "temperature": 0.8,
             "max_tokens": 8192,
             "verbose": False,
+            "frequency_penalty": 0.95,
         }
 
     def load_history(self) -> List[ChatMessage]:
@@ -325,15 +326,19 @@ class ChatProvider(ABC):
         return formatted_message
 
     def set_parameter(self, param: str, value: Any):
-        if param in self.default_parameters:
+        if param in self.default_parameters or param == "repeat_penalty":  # Allow repeat_penalty
             if param in ["num_predict", "top_k", "repeat_last_n", "num_ctx"]:
                 value = int(value)
-            elif param in ["top_p", "temperature", "repeat_penalty", "frequency_penalty"]:  # Added both penalty types
+            elif param in ["top_p", "temperature", "repeat_penalty", "frequency_penalty"]:
                 value = float(value)
             elif param == "stop":
                 value = value.split() if isinstance(value, str) else value
             elif param == "verbose":
                 value = str(value).lower() == "true"
+            
+            # Map repeat_penalty to frequency_penalty for OpenAI
+            if param == "repeat_penalty" and isinstance(self, OpenAIChatSession):
+                param = "frequency_penalty"
             
             self.parameters[param] = value
             self.history_manager.save_parameters(self.parameters)
@@ -417,15 +422,19 @@ class OllamaChatSession(ChatProvider):
                     return None
 
     def set_parameter(self, param: str, value: Any):
-        if param in self.default_parameters:
+        if param in self.default_parameters or param == "repeat_penalty":  # Allow repeat_penalty
             if param in ["num_predict", "top_k", "repeat_last_n", "num_ctx"]:
                 value = int(value)
-            elif param in ["top_p", "temperature", "repeat_penalty"]:
+            elif param in ["top_p", "temperature", "repeat_penalty", "frequency_penalty"]:
                 value = float(value)
             elif param == "stop":
                 value = value.split() if isinstance(value, str) else value
             elif param == "verbose":
                 value = str(value).lower() == "true"
+            
+            # Map repeat_penalty to frequency_penalty for OpenAI
+            if param == "repeat_penalty" and isinstance(self, OpenAIChatSession):
+                param = "frequency_penalty"
             
             self.parameters[param] = value
             self.history_manager.save_parameters(self.parameters)
@@ -501,7 +510,7 @@ class OpenAIChatSession(ChatProvider):
         self.base_url = base_url
         self.model = model
         self.default_parameters.update({
-            "frequency_penalty": 0.0,  # Added frequency_penalty to match OpenAI's parameter name
+            "frequency_penalty": 0.95,
         })
 
     async def send_message(self, message: str):
@@ -516,7 +525,7 @@ class OpenAIChatSession(ChatProvider):
             "messages": messages,
             "temperature": self.parameters.get("temperature", 0.8),
             "max_tokens": self.parameters.get("max_tokens", 8192),
-            "frequency_penalty": self.parameters.get("frequency_penalty", 0.0),  # Use frequency_penalty for OpenAI
+            "frequency_penalty": self.parameters.get("frequency_penalty", 0.0),
             "stream": True
         }
 
@@ -524,7 +533,6 @@ class OpenAIChatSession(ChatProvider):
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}"
         }
-
         async with aiohttp.ClientSession() as session:
             async with session.post(self.base_url, headers=headers, json=data) as response:
                 if response.status == 200:
