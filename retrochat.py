@@ -275,6 +275,7 @@ class ChatProvider(ABC):
             "max_tokens": 8192,
             "verbose": False,
             "frequency_penalty": 1.1,
+            "repeat_penalty": 1.1,
         }
 
     def load_history(self) -> List[ChatMessage]:
@@ -326,31 +327,37 @@ class ChatProvider(ABC):
         return formatted_message
 
     def set_parameter(self, param: str, value: Any):
-        if param in self.default_parameters or param == "repeat_penalty":  # Allow repeat_penalty
+        if param in self.default_parameters or param == "repeat_penalty":
             if param in ["num_predict", "top_k", "repeat_last_n", "num_ctx"]:
                 value = int(value)
-            elif param in ["top_p", "temperature", "repeat_penalty"]:
+            elif param in ["top_p", "temperature", "repeat_penalty", "frequency_penalty"]:
                 value = float(value)
             elif param == "stop":
                 value = value.split() if isinstance(value, str) else value
             elif param == "verbose":
                 value = str(value).lower() == "true"
             
+            # Map repeat_penalty to frequency_penalty for OpenAI
+            if param == "repeat_penalty" and isinstance(self, OpenAIChatSession):
+                param = "frequency_penalty"
+            
             self.parameters[param] = value
             self.history_manager.save_parameters(self.parameters)
             
-            if param != "verbose" or value:
+            # Only display the message if the value is different from the default
+            if param in self.default_parameters and value != self.default_parameters[param]:
                 console.print(f"Parameter '{param}' set to {value}", style="cyan")
-        else:
-            console.print(f"Invalid parameter: {param}", style="bold red")
+            elif param not in self.default_parameters:
+                console.print(f"Parameter '{param}' set to {value}", style="cyan")
 
     def show_parameters(self):
         console.print("Current Parameters:", style="cyan")
         for param, default_value in self.default_parameters.items():
             current_value = self.parameters.get(param, default_value)
-            if param != "verbose" or current_value:
+            if current_value != default_value or (param == "verbose" and current_value):
                 console.print(f"{param}: {current_value}", style="green")
-        console.print(f"system: {self.system_message if self.system_message else 'Not set'}", style="green")
+        if self.system_message:
+            console.print(f"system: {self.system_message}", style="green")
 
     def calculate_tokens(self, text: str) -> int:
         return len(tokenizer.encode(text))
@@ -925,9 +932,10 @@ class ChatApp:
         if new_session:
             saved_params = self.history_manager.load_parameters()
             for param, value in saved_params.items():
-                if param == "repeat_penalty":
-                    new_session.set_parameter("repeat_penalty", value)
-                elif param != "frequency_penalty":
+                if param in new_session.default_parameters:
+                    if value != new_session.default_parameters[param]:
+                        new_session.set_parameter(param, value)
+                else:
                     new_session.set_parameter(param, value)
             if self.current_session:
                 new_session.chat_history = self.current_session.chat_history
