@@ -328,15 +328,18 @@ class ChatProvider(ABC):
         if param in self.default_parameters:
             if param in ["num_predict", "top_k", "repeat_last_n", "num_ctx"]:
                 value = int(value)
-            elif param in ["top_p", "temperature", "repeat_penalty"]:
+            elif param in ["top_p", "temperature", "repeat_penalty", "frequency_penalty"]:  # Added both penalty types
                 value = float(value)
             elif param == "stop":
                 value = value.split() if isinstance(value, str) else value
             elif param == "verbose":
                 value = str(value).lower() == "true"
+            
             self.parameters[param] = value
             self.history_manager.save_parameters(self.parameters)
-            console.print(f"Parameter '{param}' set to {value}", style="cyan")
+            
+            if param != "verbose" or value:
+                console.print(f"Parameter '{param}' set to {value}", style="cyan")
         else:
             console.print(f"Invalid parameter: {param}", style="bold red")
 
@@ -497,6 +500,9 @@ class OpenAIChatSession(ChatProvider):
         self.api_key = api_key
         self.base_url = base_url
         self.model = model
+        self.default_parameters.update({
+            "frequency_penalty": 0.0,  # Added frequency_penalty to match OpenAI's parameter name
+        })
 
     async def send_message(self, message: str):
         self.add_to_history("user", message)
@@ -510,13 +516,15 @@ class OpenAIChatSession(ChatProvider):
             "messages": messages,
             "temperature": self.parameters.get("temperature", 0.8),
             "max_tokens": self.parameters.get("max_tokens", 8192),
-            "frequency_penalty": self.parameters.get("frequency_penalty", 0.0),
+            "frequency_penalty": self.parameters.get("frequency_penalty", 0.0),  # Use frequency_penalty for OpenAI
             "stream": True
         }
+
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}"
         }
+
         async with aiohttp.ClientSession() as session:
             async with session.post(self.base_url, headers=headers, json=data) as response:
                 if response.status == 200:
