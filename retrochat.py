@@ -386,20 +386,20 @@ class OllamaChatSession(ChatProvider):
         })
     
     def set_parameter(self, param: str, value: Any):
-        if param in self.default_parameters or param == "repeat_penalty":
+        if param in self.default_parameters or param in ["repeat_penalty", "frequency_penalty"]:
             if param in ["num_predict", "top_k", "repeat_last_n", "num_ctx"]:
                 value = int(value)
-            elif param in ["top_p", "temperature", "repeat_penalty"]:
+            elif param in ["top_p", "temperature", "repeat_penalty", "frequency_penalty"]:
                 value = float(value)
             elif param == "stop":
                 value = value.split() if isinstance(value, str) else value
             elif param == "verbose":
                 value = str(value).lower() == "true"
             
-            if param == "repeat_penalty":
+            # Handle the special case for repeat_penalty and frequency_penalty
+            if param in ["repeat_penalty", "frequency_penalty"]:
                 self.parameters["repeat_penalty"] = value
-                if isinstance(self, OpenAIChatSession):
-                    self.parameters["frequency_penalty"] = value
+                self.parameters["frequency_penalty"] = value
             else:
                 self.parameters[param] = value
             
