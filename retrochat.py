@@ -747,6 +747,7 @@ class ChatApp:
         self.updated = False
         self.last_provider = None
         self.last_model = None
+        self.ENV_FILE = ENV_FILE
 
         self.load_env_variables()
         self.load_last_chat()
