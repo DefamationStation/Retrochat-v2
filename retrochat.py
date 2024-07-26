@@ -998,7 +998,7 @@ class ChatApp:
     async def start(self):
         try:
             console.clear()
-            console.print("Welcome to Retrochat!", style="bold green")
+            console.print("Welcome to Retrochat! v1.0.7", style="bold green")
             
             # Check for setup
             check_and_setup()
