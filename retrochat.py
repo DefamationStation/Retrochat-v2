@@ -745,7 +745,7 @@ class ChatApp:
         self.updated = False
 
         self.load_env_variables()
-        self.save_last_chat_name(self.chat_name)
+        self.load_last_chat()
 
     def load_env_variables(self):
         if os.path.exists(ENV_FILE):
@@ -758,7 +758,13 @@ class ChatApp:
             self.last_commit_hash = os.getenv("LAST_COMMIT_HASH")
             self.updated = os.getenv("UPDATED", "false").lower() == "true"
             self.history_manager.set_chat_name(self.chat_name)
-
+    def load_last_chat(self):
+        self.history_manager.set_chat_name(self.chat_name)
+        chat_history = self.history_manager.load_history()
+        system_message = self.history_manager.load_system_message()
+        parameters = self.history_manager.load_parameters()
+        return chat_history, system_message, parameters
+    
     def display_update_message(self):
         if self.updated:
             console.print("Updates installed in the last run:", style="bold cyan")
@@ -961,6 +967,13 @@ class ChatApp:
             self.current_session = await self.switch_provider()
             if not self.current_session:
                 return
+
+            # Load the last active chat
+            chat_history, system_message, parameters = self.load_last_chat()
+            self.current_session.chat_history = chat_history
+            self.current_session.system_message = system_message
+            for param, value in parameters.items():
+                self.current_session.set_parameter(param, value)
 
             self.current_session.display_history()
 
