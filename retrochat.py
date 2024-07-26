@@ -998,7 +998,7 @@ class ChatApp:
     async def start(self):
         try:
             console.clear()
-            console.print("Welcome to Retrochat! v1.0.7", style="bold green")
+            console.print("Welcome to Retrochat! [bold green]v1.0.7[/bold green]", style="bold green")
             
             # Check for setup
             check_and_setup()
@@ -1032,8 +1032,8 @@ class ChatApp:
             # Display provider and model information
             provider_name = type(self.current_session).__name__.replace('ChatSession', '')
             model_name = getattr(self.current_session, 'model', 'Unknown')
-            console.print(f"Current provider: {provider_name}", style="cyan")
-            console.print(f"Current model: {model_name}", style="cyan")
+            console.print(f"Current provider: [blue]{provider_name}[/blue]", style="cyan")
+            console.print(f"Current model: [blue]{model_name}[/blue]", style="cyan")
 
             while True:
                 try:
