@@ -280,6 +280,9 @@ class ChatProvider(ABC):
             "repeat_penalty": 1.1,
         }
 
+        self.parameters = {**self.default_parameters, **self.parameters}
+
+
     def load_history(self) -> List[ChatMessage]:
         try:
             return self.history_manager.load_history()
@@ -328,41 +331,38 @@ class ChatProvider(ABC):
         formatted_message = '\n\n'.join(paragraphs)
         return formatted_message
 
-    def set_parameter(self, param: str, value: Any):
-        if param in self.default_parameters or param in ["repeat_penalty", "frequency_penalty"]:
-            if param in ["num_predict", "top_k", "repeat_last_n", "num_ctx"]:
-                value = int(value)
-            elif param in ["top_p", "temperature", "repeat_penalty", "frequency_penalty"]:
-                value = float(value)
-            elif param == "stop":
-                value = value.split() if isinstance(value, str) else value
-            elif param == "verbose":
-                value = str(value).lower() == "true"
+    def set_parameter(self, param: str, value: Any, print_message: bool = True):
+        if param in self.default_parameters:
+            # Convert value to the correct type based on the default value
+            value_type = type(self.default_parameters[param])
+            try:
+                typed_value = value_type(value)
+            except ValueError:
+                if print_message:
+                    console.print(f"Invalid value for {param}. Expected {value_type.__name__}.", style="bold red")
+                return
             
-            # Handle linked frequency_penalty and repeat_penalty
-            if param in ["repeat_penalty", "frequency_penalty"]:
-                self.parameters["repeat_penalty"] = value
-                self.parameters["frequency_penalty"] = value
-            else:
-                self.parameters[param] = value
+            self.parameters[param] = typed_value
+            self.history_manager.save_parameters(self.parameters)
+            if print_message:
+                console.print(f"Parameter '{param}' set to {typed_value}", style="cyan")
+        else:
+            if print_message:
+                console.print(f"Unknown parameter: {param}", style="bold red")
             
+            self.parameters[param] = value
             self.history_manager.save_parameters(self.parameters)
             
-            if param != "verbose" or value:
+            if print_message and param not in self.default_parameters:
                 console.print(f"Parameter '{param}' set to {value}", style="cyan")
-        else:
-            console.print(f"Invalid parameter: {param}", style="bold red")
+        # The 'else' block is unnecessary since the condition 'param in self.default_parameters' covers all cases.  
 
     def show_parameters(self):
         console.print("Current Parameters:", style="cyan")
         for param, default_value in self.default_parameters.items():
             current_value = self.parameters.get(param, default_value)
-            console.print(f"{param}: {current_value}", style="green")
-        
-        # Add frequency_penalty if it's not already in default_parameters
-        if "frequency_penalty" not in self.default_parameters:
-            console.print(f"frequency_penalty: {self.parameters.get('frequency_penalty', self.parameters.get('repeat_penalty', 1.1))}", style="green")
-        
+            if current_value != default_value or (param == "verbose" and current_value):
+                console.print(f"{param}: {current_value}", style="green")
         if self.system_message:
             console.print(f"system: {self.system_message}", style="green")
 
@@ -393,7 +393,7 @@ class OllamaChatSession(ChatProvider):
         })
     
     def set_parameter(self, param: str, value: Any):
-        if param in self.default_parameters or param in ["repeat_penalty", "frequency_penalty"]:
+        if param in self.default_parameters or param == "repeat_penalty":
             if param in ["num_predict", "top_k", "repeat_last_n", "num_ctx"]:
                 value = int(value)
             elif param in ["top_p", "temperature", "repeat_penalty", "frequency_penalty"]:
@@ -403,19 +403,18 @@ class OllamaChatSession(ChatProvider):
             elif param == "verbose":
                 value = str(value).lower() == "true"
             
-            # Handle the special case for repeat_penalty and frequency_penalty
-            if param in ["repeat_penalty", "frequency_penalty"]:
-                self.parameters["repeat_penalty"] = value
-                self.parameters["frequency_penalty"] = value
-            else:
-                self.parameters[param] = value
+            # Map repeat_penalty to frequency_penalty for OpenAI
+            if param == "repeat_penalty" and isinstance(self, OpenAIChatSession):
+                param = "frequency_penalty"
             
+            self.parameters[param] = value
             self.history_manager.save_parameters(self.parameters)
             
-            if param != "verbose" or value:
+            # Only display the message if the value is different from the default
+            if param in self.default_parameters and value != self.default_parameters[param]:
                 console.print(f"Parameter '{param}' set to {value}", style="cyan")
-        else:
-            console.print(f"Invalid parameter: {param}", style="bold red")
+            elif param not in self.default_parameters:
+                console.print(f"Parameter '{param}' set to {value}", style="cyan")
 
     async def send_message(self, message: str):
         self.add_to_history("user", message)
@@ -656,9 +655,18 @@ class CommandHandler:
 
     def handle_set(self, param: str, value: str, session: ChatProvider):
         if not param:
-            session.show_parameters()
+            console.print("Available Parameters:", style="cyan")
+            all_params = {**session.default_parameters, **session.parameters}
+            for param, current_value in all_params.items():
+                default_value = session.default_parameters.get(param, "N/A")
+                if current_value == default_value:
+                    console.print(f"{param}: {current_value} (default)", style="green")
+                else:
+                    console.print(f"{param}: {current_value} (default: {default_value})", style="yellow")
+            if session.system_message:
+                console.print(f"system: {session.system_message}", style="magenta")
         else:
-            session.set_parameter(param, value)
+            session.set_parameter(param, value, print_message=True)
 
     def handle_set_system(self, message: str, session: ChatProvider):
         session.set_system_message(message)
@@ -756,19 +764,6 @@ class ChatApp:
 
         self.load_env_variables()
         self.load_last_chat()
-
-    def display_non_default_parameters(self):
-        non_default_params = {}
-        for param, value in self.current_session.parameters.items():
-            if param in self.current_session.default_parameters:
-                if value != self.current_session.default_parameters[param]:
-                    non_default_params[param] = value
-            else:
-                non_default_params[param] = value
-        
-        if non_default_params:
-            for param, value in non_default_params.items():
-                console.print(f"{param}: {value}", style="green")
 
     def load_env_variables(self):
         if os.path.exists(ENV_FILE):
@@ -1001,7 +996,11 @@ class ChatApp:
     def apply_saved_parameters(self, session):
         saved_params = self.history_manager.load_parameters()
         for param, value in saved_params.items():
-            session.parameters[param] = value
+            if param in session.default_parameters:
+                if value != session.default_parameters[param]:
+                    session.set_parameter(param, value)
+            else:
+                session.set_parameter(param, value)
         if self.current_session:
             session.chat_history = self.current_session.chat_history
             session.system_message = self.current_session.system_message
@@ -1035,10 +1034,8 @@ class ChatApp:
             chat_history, system_message, parameters = self.load_last_chat()
             self.current_session.chat_history = chat_history
             self.current_session.system_message = system_message
-            self.apply_saved_parameters(self.current_session)
-            
-            # Display non-default parameters
-            self.display_non_default_parameters()
+            for param, value in parameters.items():
+                self.current_session.set_parameter(param, value, print_message=False)  # Don't print when setting parameters
 
             if not chat_history:
                 console.print("No previous chat history.", style="cyan")
