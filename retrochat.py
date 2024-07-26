@@ -37,6 +37,8 @@ LAST_CHAT_NAME_KEY = "LAST_CHAT_NAME"
 OLLAMA_IP_KEY = "OLLAMA_IP"
 OLLAMA_PORT_KEY = "OLLAMA_PORT"
 RETROCHAT_SCRIPT = os.path.join(RETROCHAT_DIR, 'retrochat.py')
+LAST_PROVIDER_KEY = "LAST_PROVIDER"
+LAST_MODEL_KEY = "LAST_MODEL"
 
 os.makedirs(RETROCHAT_DIR, exist_ok=True)
 
@@ -743,6 +745,8 @@ class ChatApp:
         self.current_session = None
         self.last_commit_hash = None
         self.updated = False
+        self.last_provider = None
+        self.last_model = None
 
         self.load_env_variables()
         self.load_last_chat()
@@ -757,7 +761,16 @@ class ChatApp:
             self.ollama_port = os.getenv(OLLAMA_PORT_KEY, '11434')
             self.last_commit_hash = os.getenv("LAST_COMMIT_HASH")
             self.updated = os.getenv("UPDATED", "false").lower() == "true"
+            self.last_provider = os.getenv(LAST_PROVIDER_KEY)
+            self.last_model = os.getenv(LAST_MODEL_KEY)
             self.history_manager.set_chat_name(self.chat_name)
+
+    def save_last_provider_and_model(self, provider: str, model: str):
+        set_key(ENV_FILE, LAST_PROVIDER_KEY, provider)
+        set_key(ENV_FILE, LAST_MODEL_KEY, model)
+        self.last_provider = provider
+        self.last_model = model
+
     def load_last_chat(self):
         self.history_manager.set_chat_name(self.chat_name)
         chat_history = self.history_manager.load_history()
@@ -951,6 +964,42 @@ class ChatApp:
                 new_session.system_message = None
             return new_session
         return None
+    
+    async def create_session_from_last(self):
+        if self.last_provider == 'Ollama':
+            if not self.ensure_ollama_connection():
+                return None
+            model_url = f"http://{self.ollama_ip}:{self.ollama_port}/api/chat"
+            new_session = self.provider_factory.create_provider('Ollama', model_url, self.last_model, self.history_manager)
+        elif self.last_provider == 'Anthropic':
+            if not self.ensure_api_key('anthropic_api_key', ANTHROPIC_API_KEY_NAME):
+                return None
+            new_session = self.provider_factory.create_provider('Anthropic', self.anthropic_api_key, "https://api.anthropic.com/v1/messages", self.history_manager, self.last_model)
+        elif self.last_provider == 'OpenAI':
+            if not self.ensure_api_key('openai_api_key', OPENAI_API_KEY_NAME):
+                return None
+            new_session = self.provider_factory.create_provider('OpenAI', self.openai_api_key, "https://api.openai.com/v1/chat/completions", self.last_model, self.history_manager)
+        else:
+            return None
+
+        if new_session:
+            self.apply_saved_parameters(new_session)
+        return new_session
+
+    def apply_saved_parameters(self, session):
+        saved_params = self.history_manager.load_parameters()
+        for param, value in saved_params.items():
+            if param in session.default_parameters:
+                if value != session.default_parameters[param]:
+                    session.set_parameter(param, value)
+            else:
+                session.set_parameter(param, value)
+        if self.current_session:
+            session.chat_history = self.current_session.chat_history
+            session.system_message = self.current_session.system_message
+        else:
+            session.chat_history = []
+            session.system_message = None
 
     async def start(self):
         try:
@@ -964,7 +1013,13 @@ class ChatApp:
             if check_for_updates():
                 return  # Exit if updated
 
-            self.current_session = await self.switch_provider()
+            # Try to create a session from the last saved provider and model
+            self.current_session = await self.create_session_from_last()
+            
+            # If that fails, switch to a new provider
+            if not self.current_session:
+                self.current_session = await self.switch_provider()
+            
             if not self.current_session:
                 return
 
@@ -975,7 +1030,16 @@ class ChatApp:
             for param, value in parameters.items():
                 self.current_session.set_parameter(param, value)
 
-            self.current_session.display_history()
+            if not chat_history:
+                console.print("No previous chat history.", style="cyan")
+            else:
+                self.current_session.display_history()
+
+            # Display provider and model information
+            provider_name = type(self.current_session).__name__.replace('ChatSession', '')
+            model_name = getattr(self.current_session, 'model', 'Unknown')
+            console.print(f"Current provider: {provider_name}", style="cyan")
+            console.print(f"Current model: {model_name}", style="cyan")
 
             while True:
                 try:
