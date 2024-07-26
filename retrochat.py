@@ -770,6 +770,7 @@ class ChatApp:
         set_key(ENV_FILE, LAST_MODEL_KEY, model)
         self.last_provider = provider
         self.last_model = model
+        console.print(f"Saved last provider: {provider} and model: {model}", style="cyan")
 
     def load_last_chat(self):
         self.history_manager.set_chat_name(self.chat_name)
@@ -937,31 +938,25 @@ class ChatApp:
                 return None
             model_url = f"http://{self.ollama_ip}:{self.ollama_port}/api/chat"
             new_session = self.provider_factory.create_provider('Ollama', model_url, selected_model, self.history_manager)
+            provider = 'Ollama'
         elif mode == '2':
             if not self.ensure_api_key('anthropic_api_key', ANTHROPIC_API_KEY_NAME):
                 return None
             selected_model = await self.select_anthropic_model()
             new_session = self.provider_factory.create_provider('Anthropic', self.anthropic_api_key, "https://api.anthropic.com/v1/messages", self.history_manager, selected_model)
+            provider = 'Anthropic'
         elif mode == '3':
             if not self.ensure_api_key('openai_api_key', OPENAI_API_KEY_NAME):
                 return None
             selected_model = await self.select_openai_model()
             new_session = self.provider_factory.create_provider('OpenAI', self.openai_api_key, "https://api.openai.com/v1/chat/completions", selected_model, self.history_manager)
+            provider = 'OpenAI'
 
         if new_session:
-            saved_params = self.history_manager.load_parameters()
-            for param, value in saved_params.items():
-                if param in new_session.default_parameters:
-                    if value != new_session.default_parameters[param]:
-                        new_session.set_parameter(param, value)
-                else:
-                    new_session.set_parameter(param, value)
-            if self.current_session:
-                new_session.chat_history = self.current_session.chat_history
-                new_session.system_message = self.current_session.system_message
-            else:
-                new_session.chat_history = []
-                new_session.system_message = None
+            self.apply_saved_parameters(new_session)
+            # Save the new provider and model
+            self.save_last_provider_and_model(provider, selected_model)
+            console.print(f"Switched to {provider} with model {selected_model}", style="cyan")
             return new_session
         return None
     
@@ -984,6 +979,7 @@ class ChatApp:
 
         if new_session:
             self.apply_saved_parameters(new_session)
+            console.print(f"Loaded last provider: {self.last_provider} with model: {self.last_model}", style="cyan")
         return new_session
 
     def apply_saved_parameters(self, session):
