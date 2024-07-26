@@ -23,3 +23,4 @@ build/retrochat/EXE-00.toc
 build/retrochat/base_library.zip
 retrochat_env/
 .venv/
+__pycache__/hook-tiktoken.cpython-312.pyc
