@@ -770,7 +770,6 @@ class ChatApp:
         set_key(ENV_FILE, LAST_MODEL_KEY, model)
         self.last_provider = provider
         self.last_model = model
-        console.print(f"Saved last provider: {provider} and model: {model}", style="cyan")
 
     def load_last_chat(self):
         self.history_manager.set_chat_name(self.chat_name)
@@ -956,7 +955,6 @@ class ChatApp:
             self.apply_saved_parameters(new_session)
             # Save the new provider and model
             self.save_last_provider_and_model(provider, selected_model)
-            console.print(f"Switched to {provider} with model {selected_model}", style="cyan")
             return new_session
         return None
     
@@ -979,7 +977,6 @@ class ChatApp:
 
         if new_session:
             self.apply_saved_parameters(new_session)
-            console.print(f"Loaded last provider: {self.last_provider} with model: {self.last_model}", style="cyan")
         return new_session
 
     def apply_saved_parameters(self, session):
