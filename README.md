@@ -1,5 +1,5 @@
 # RetroChat
-
+https://imgur.com/a/rXm20TT
 RetroChat is a powerful command-line interface for interacting with various AI language models. It provides a seamless experience for engaging with different chat providers while offering robust features for managing and customizing your conversations.
 
 ATTENTION: RAG only works with nomic-embed-text currently, all you need to do is have it on Ollama.
