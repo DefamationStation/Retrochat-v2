@@ -5,19 +5,14 @@ RetroChat is a powerful command-line interface for interacting with various AI l
 ## Features
 
 - **Multi-Provider Support**: Choose between Ollama, Anthropic (Claude), and OpenAI (GPT) models.
-- **Persistent Chat History**: Save and resume conversations across sessions.
-- **Chat Management**: Create, rename, delete, and switch between multiple chat sessions.
 - **Customizable Settings**: Fine-tune AI behavior with adjustable parameters for all providers.
 - **Conversation Editing**: Edit entire conversation history using your preferred text editor.
-- **System Message Support**: Set global system messages to guide AI behavior across all chats.
 - **Multi-line Input**: Enter complex queries or code snippets with ease.
 - **Command System**: Control various aspects of the chat and application with '/' prefixed commands.
 - **Local Setup**: Easy installation in your home directory for system-wide access.
 - **Auto-Update**: Check for and apply updates automatically.
 - **Provider Switching**: Easily switch between different AI providers and models during a session.
 - **Token Counting**: Display token usage for messages and entire conversations.
-- **Environment Variable Management**: Securely store and manage API keys and other settings.
-- **Cross-Platform Support**: Works on Windows, macOS, and Linux.
 - **Document Loading and Querying**: Load documents from local folders and query them using AI models.
 
 ## Installation
