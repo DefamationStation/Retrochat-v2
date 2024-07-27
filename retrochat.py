@@ -21,7 +21,8 @@ from dotenv import load_dotenv, set_key
 import shutil
 import tiktoken
 from langchain_chroma import Chroma
-from langchain.document_loaders import PyPDFDirectoryLoader
+from langchain.document_loaders import TextLoader, UnstructuredWordDocumentLoader, UnstructuredMarkdownLoader, PyPDFDirectoryLoader
+from langchain.document_loaders.base import BaseLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.schema.document import Document
 from langchain_community.embeddings import SentenceTransformerEmbeddings
@@ -659,6 +660,8 @@ class CommandHandler:
                 console.print("Your original conversation has not been modified.", style="yellow")
         elif cmd == '/show' and args[0] == 'length':
             await self.handle_show_length(session)
+        elif cmd == '/show' and args[0] == 'context':
+            await self.chat_app.handle_show_context()
         elif cmd == '/switch':
             return await self.handle_switch(args[0], session)
         elif cmd == '/help':
@@ -745,6 +748,7 @@ class CommandHandler:
         console.print("/set <parameter> <value> - Set a parameter", style="green")
         console.print("/edit - Edit the entire conversation", style="green")
         console.print("/show length - Display the total conversation tokens", style="green")
+        console.print("/show context - Display the context of the last query", style="green")
         console.print("/switch - Switch to a different provider or model", style="green")
         console.print("/help - Display this help message", style="green")
         console.print("/exit - Exit the program", style="green")
@@ -754,7 +758,7 @@ class DocumentManager:
         self.chroma_path = CHROMA_PATH
         self.embedding_function = get_embedding_function()
 
-    def load_documents(self, folder_name: str):
+    def load_documents(self, folder_name: str) -> bool:
         data_path = os.path.join(RETROCHAT_DIR, folder_name)
         console.print(f"Attempting to load documents from: {data_path}", style="cyan")
         
@@ -763,8 +767,14 @@ class DocumentManager:
             return False
         
         try:
-            document_loader = PyPDFDirectoryLoader(data_path)
-            documents = document_loader.load()
+            documents = []
+            for filename in os.listdir(data_path):
+                file_path = os.path.join(data_path, filename)
+                if os.path.isfile(file_path):
+                    loader = self.get_loader_for_file(file_path)
+                    if loader:
+                        documents.extend(loader.load())
+            
             console.print(f"Loaded {len(documents)} documents", style="green")
             
             chunks = self.split_documents(documents)
@@ -777,6 +787,20 @@ class DocumentManager:
         except Exception as e:
             console.print(f"Error loading documents: {str(e)}", style="bold red")
             return False
+
+    def get_loader_for_file(self, file_path: str) -> BaseLoader:
+        _, ext = os.path.splitext(file_path.lower())
+        if ext == '.pdf':
+            return PyPDFDirectoryLoader(os.path.dirname(file_path))
+        elif ext == '.txt':
+            return TextLoader(file_path)
+        elif ext in ['.doc', '.docx']:
+            return UnstructuredWordDocumentLoader(file_path)
+        elif ext == '.md':
+            return UnstructuredMarkdownLoader(file_path)
+        else:
+            console.print(f"Unsupported file type: {file_path}", style="yellow")
+            return None
 
     def split_documents(self, documents: List[Document]):
         text_splitter = RecursiveCharacterTextSplitter(
@@ -1144,10 +1168,24 @@ class ChatApp:
         Answer:
         """
 
-        console.print(f"Sending query to AI model...", style="cyan")
+        #console.print(f"Sending query to AI model...", style="cyan")
+        #console.print(f"Query: {query}", style="cyan")
         response = await self.current_session.send_message(prompt)
-        console.print(f"Query: {query}", style="cyan")
-        console.print(f"Response: {response}", style="yellow")
+        
+        # Store the context and prompt for later use
+        self.last_query_context = context
+        self.last_query_prompt = prompt
+
+        return response
+    
+    async def handle_show_context(self):
+        if hasattr(self, 'last_query_context') and hasattr(self, 'last_query_prompt'):
+            console.print("Last query context:", style="cyan")
+            console.print(self.last_query_context, style="yellow")
+            console.print("\nLast query prompt:", style="cyan")
+            console.print(self.last_query_prompt, style="yellow")
+        else:
+            console.print("No context available. Please run a query first.", style="bold red")
 
     async def start(self):
         try:
