@@ -822,12 +822,12 @@ class DocumentManager:
         new_chunks = [chunk for chunk in chunks_with_ids if chunk.metadata["id"] not in existing_ids]
 
         if new_chunks:
-            console.print(f"👉 Adding new documents: {len(new_chunks)}", style="cyan")
+            console.print(f"-> Adding new documents: {len(new_chunks)}", style="cyan")
             new_chunk_ids = [chunk.metadata["id"] for chunk in new_chunks]
             db.add_documents(new_chunks, ids=new_chunk_ids)
             # Remove the db.persist() call as it's no longer needed
         else:
-            console.print("✅ No new documents to add", style="green")
+            console.print("[OK] No new documents to add", style="green")
 
     def calculate_chunk_ids(self, chunks: List[Document], folder_name: str):
         last_page_id = None
