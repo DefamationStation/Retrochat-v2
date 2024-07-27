@@ -4,6 +4,10 @@ RetroChat is a powerful command-line interface for interacting with various AI l
 
 ATTENTION: RAG only works with nomic-embed-text currently, all you need to do is have it on Ollama.
 
+1. Create a folder in user/.retrochat and put all your files in it.
+2. In the chat type /load <folder name> and you'll get a message if it's executed successfully.
+3. Then use @<folder name> to ask that specific folder's documents questions.
+
 ## Features
 
 - **Multi-Provider Support**: Choose between Ollama, Anthropic (Claude), and OpenAI (GPT) models.
