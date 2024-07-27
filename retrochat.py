@@ -1,29 +1,31 @@
 import os
-import platform
 import sys
 import asyncio
 import aiohttp
 import requests
 import sqlite3
-import base64
 import json
 import logging
 import tempfile
 import subprocess
 import hashlib
-from dataclasses import dataclass, asdict
+import platform
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
 from prompt_toolkit import PromptSession
-from prompt_toolkit.filters import Condition
-from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.keys import Keys
 from prompt_toolkit.patch_stdout import patch_stdout
-from abc import ABC, abstractmethod
 from rich.console import Console
 from rich.prompt import Prompt
 from dotenv import load_dotenv, set_key
 import shutil
 import tiktoken
+from langchain_chroma import Chroma
+from langchain.document_loaders import PyPDFDirectoryLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain.schema.document import Document
+from langchain_community.embeddings import SentenceTransformerEmbeddings
+from langchain.embeddings import OllamaEmbeddings
 
 # Constants
 USER_HOME = os.path.expanduser('~')
@@ -39,6 +41,7 @@ OLLAMA_PORT_KEY = "OLLAMA_PORT"
 RETROCHAT_SCRIPT = os.path.join(RETROCHAT_DIR, 'retrochat.py')
 LAST_PROVIDER_KEY = "LAST_PROVIDER"
 LAST_MODEL_KEY = "LAST_MODEL"
+CHROMA_PATH = os.path.join(RETROCHAT_DIR, "chroma")
 
 os.makedirs(RETROCHAT_DIR, exist_ok=True)
 
@@ -47,6 +50,15 @@ console = Console()
 
 # Initialize tokenizer
 tokenizer = tiktoken.get_encoding("cl100k_base")
+
+def get_embedding_function():
+    load_dotenv(ENV_FILE)
+    ollama_ip = os.getenv(OLLAMA_IP_KEY, 'localhost')
+    ollama_port = os.getenv(OLLAMA_PORT_KEY, '11434')
+    return OllamaEmbeddings(
+        base_url=f"http://{ollama_ip}:{ollama_port}",
+        model="nomic-embed-text"
+    )
 
 # Self-setup functionality
 def setup_rchat():
@@ -737,6 +749,103 @@ class CommandHandler:
         console.print("/help - Display this help message", style="green")
         console.print("/exit - Exit the program", style="green")
 
+class DocumentManager:
+    def __init__(self):
+        self.chroma_path = CHROMA_PATH
+        self.embedding_function = get_embedding_function()
+
+    def load_documents(self, folder_name: str):
+        data_path = os.path.join(RETROCHAT_DIR, folder_name)
+        console.print(f"Attempting to load documents from: {data_path}", style="cyan")
+        
+        if not os.path.exists(data_path):
+            console.print(f"Folder '{data_path}' does not exist.", style="bold red")
+            return False
+        
+        try:
+            document_loader = PyPDFDirectoryLoader(data_path)
+            documents = document_loader.load()
+            console.print(f"Loaded {len(documents)} documents", style="green")
+            
+            chunks = self.split_documents(documents)
+            console.print(f"Split into {len(chunks)} chunks", style="green")
+            
+            self.add_to_chroma(chunks, folder_name)
+            console.print("Added chunks to Chroma database", style="green")
+            
+            return True
+        except Exception as e:
+            console.print(f"Error loading documents: {str(e)}", style="bold red")
+            return False
+
+    def split_documents(self, documents: List[Document]):
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=800,
+            chunk_overlap=80,
+            length_function=len,
+            is_separator_regex=False,
+        )
+        return text_splitter.split_documents(documents)
+
+    def add_to_chroma(self, chunks: List[Document], folder_name: str):
+        db = Chroma(persist_directory=self.chroma_path, embedding_function=self.embedding_function)
+
+        chunks_with_ids = self.calculate_chunk_ids(chunks, folder_name)
+
+        existing_items = db.get(include=[])
+        existing_ids = set(existing_items["ids"])
+
+        new_chunks = [chunk for chunk in chunks_with_ids if chunk.metadata["id"] not in existing_ids]
+
+        if new_chunks:
+            console.print(f"👉 Adding new documents: {len(new_chunks)}", style="cyan")
+            new_chunk_ids = [chunk.metadata["id"] for chunk in new_chunks]
+            db.add_documents(new_chunks, ids=new_chunk_ids)
+            # Remove the db.persist() call as it's no longer needed
+        else:
+            console.print("✅ No new documents to add", style="green")
+
+    def calculate_chunk_ids(self, chunks: List[Document], folder_name: str):
+        last_page_id = None
+        current_chunk_index = 0
+
+        for chunk in chunks:
+            source = chunk.metadata.get("source")
+            page = chunk.metadata.get("page")
+            current_page_id = f"{folder_name}/{source}:{page}"
+
+            if current_page_id == last_page_id:
+                current_chunk_index += 1
+            else:
+                current_chunk_index = 0
+
+            chunk_id = f"{current_page_id}:{current_chunk_index}"
+            last_page_id = current_page_id
+
+            chunk.metadata["id"] = chunk_id
+
+        return chunks
+
+    def query_documents(self, folder_name: str, query: str) -> List[Document]:
+        db = Chroma(persist_directory=self.chroma_path, embedding_function=self.embedding_function)
+        # First, retrieve all documents
+        all_docs = db.get()
+        
+        # Filter the documents based on the folder name
+        folder_docs_ids = [doc_id for doc_id in all_docs['ids'] if doc_id.startswith(f"{folder_name}/")]
+        
+        if not folder_docs_ids:
+            console.print(f"No documents found for folder '{folder_name}'", style="yellow")
+            return []
+        
+        # Perform the similarity search on the filtered set of documents
+        results = db.similarity_search(
+            query,
+            k=min(5, len(folder_docs_ids)),
+            filter={"id": {"$in": folder_docs_ids}}
+        )
+        return results
+
 class ChatApp:
     def __init__(self):
         self.chat_name = 'default'
@@ -753,6 +862,7 @@ class ChatApp:
         self.last_provider = None
         self.last_model = None
         self.ENV_FILE = ENV_FILE
+        self.document_manager = DocumentManager()
 
         self.load_env_variables()
         self.load_last_chat()
@@ -1009,6 +1119,36 @@ class ChatApp:
             session.chat_history = []
             session.system_message = None
 
+    async def handle_load_command(self, folder_name: str):
+        console.print(f"RETROCHAT_DIR: {RETROCHAT_DIR}", style="cyan")
+        success = self.document_manager.load_documents(folder_name)
+        if success:
+            console.print(f"Documents from '{folder_name}' loaded successfully.", style="green")
+        else:
+            console.print(f"Failed to load documents from '{folder_name}'.", style="bold red")
+
+    async def handle_query_command(self, folder_name: str, query: str):
+        results = self.document_manager.query_documents(folder_name, query)
+        if not results:
+            console.print(f"No results found for query in folder '{folder_name}'", style="yellow")
+            return
+        
+        context = "\n\n".join([doc.page_content for doc in results])
+        
+        prompt = f"""
+        Based on the following context, answer the question: {query}
+
+        Context:
+        {context}
+
+        Answer:
+        """
+
+        console.print(f"Sending query to AI model...", style="cyan")
+        response = await self.current_session.send_message(prompt)
+        console.print(f"Query: {query}", style="cyan")
+        console.print(f"Response: {response}", style="yellow")
+
     async def start(self):
         try:
             console.clear()
@@ -1058,17 +1198,27 @@ class ChatApp:
                     if user_input.lower() == '/exit':
                         console.print("Thank you for chatting. Goodbye!", style="cyan")
                         break
+                    elif user_input.startswith('/load '):
+                        folder_name = user_input.split(' ', 1)[1]
+                        await self.handle_load_command(folder_name)
+                    elif user_input.startswith('@'):
+                        parts = user_input[1:].split(' ', 1)
+                        if len(parts) == 2:
+                            folder_name, query = parts
+                            await self.handle_query_command(folder_name, query)
+                        else:
+                            console.print("Invalid query format. Use @<foldername> <question>", style="bold red")
                     elif user_input.startswith('/'):
                         result = await self.command_handler.handle_command(user_input, self.current_session)
                         if isinstance(result, ChatProvider):
                             self.current_session = result
-                    elif user_input:  # Only send non-empty messages
+                    elif user_input:
                         await self.current_session.send_message(user_input)
-                        self.current_session.save_history()  # Save history after each message
+                        self.current_session.save_history()
                 except KeyboardInterrupt:
-                    continue  # Allow Ctrl+C to clear the current input
+                    continue
                 except EOFError:
-                    break  # Exit on Ctrl+D
+                    break
 
         except Exception as e:
             console.print(f"\nAn unexpected error occurred: {e}", style="bold red")
