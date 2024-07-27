@@ -4,3 +4,10 @@ prompt_toolkit
 rich
 python-dotenv
 tiktoken
+langchain
+langchain-community
+langchain-chroma
+langchain-text-splitters
+unstructured
+pypdf
+chromadb
