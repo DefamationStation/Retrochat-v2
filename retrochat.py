@@ -28,7 +28,6 @@ from langchain.schema.document import Document
 from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain.embeddings import OllamaEmbeddings
 
-# Constants
 USER_HOME = os.path.expanduser('~')
 RETROCHAT_DIR = os.path.join(USER_HOME, '.retrochat')
 ENV_FILE = os.path.join(RETROCHAT_DIR, '.env')
@@ -46,10 +45,8 @@ CHROMA_PATH = os.path.join(RETROCHAT_DIR, "chroma")
 
 os.makedirs(RETROCHAT_DIR, exist_ok=True)
 
-# Initialize rich console
 console = Console()
 
-# Initialize tokenizer
 tokenizer = tiktoken.get_encoding("cl100k_base")
 
 def get_embedding_function():
@@ -61,22 +58,18 @@ def get_embedding_function():
         model="nomic-embed-text"
     )
 
-# Self-setup functionality
 def setup_rchat():
     os.makedirs(RETROCHAT_DIR, exist_ok=True)
     
-    # Copy the current script to RETROCHAT_DIR
     current_script = sys.argv[0]
     shutil.copy2(current_script, RETROCHAT_SCRIPT)
     console.print(f"Copied RetroChat script to {RETROCHAT_SCRIPT}", style="cyan")
     
-    # Create rchat.bat
     rchat_bat_path = os.path.join(RETROCHAT_DIR, "rchat.bat")
     with open(rchat_bat_path, "w") as f:
         f.write(f'@echo off\npython "{RETROCHAT_SCRIPT}" %*')
     console.print(f"Created rchat.bat at {rchat_bat_path}", style="cyan")
     
-    # Create .env file
     if not os.path.exists(ENV_FILE):
         with open(ENV_FILE, "w") as f:
             f.write(f"{ANTHROPIC_API_KEY_NAME}=\n")
@@ -86,7 +79,6 @@ def setup_rchat():
             f.write(f"{OLLAMA_PORT_KEY}=11434\n")
         console.print(f"Created .env file at {ENV_FILE}", style="cyan")
     
-    # Add RETROCHAT_DIR to PATH
     if sys.platform.startswith('win'):
         import winreg
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_ALL_ACCESS)
@@ -104,7 +96,6 @@ def setup_rchat():
         finally:
             winreg.CloseKey(key)
     else:
-        # For Unix-like systems
         shell = os.environ.get("SHELL", "").split("/")[-1]
         rc_file = f".{shell}rc"
         rc_path = os.path.join(USER_HOME, rc_file)
@@ -352,7 +343,6 @@ class ChatProvider(ABC):
             elif param == "verbose":
                 value = str(value).lower() == "true"
             
-            # Handle linked frequency_penalty and repeat_penalty
             if param in ["repeat_penalty", "frequency_penalty"]:
                 self.parameters["repeat_penalty"] = value
                 self.parameters["frequency_penalty"] = value
@@ -372,7 +362,6 @@ class ChatProvider(ABC):
             current_value = self.parameters.get(param, default_value)
             console.print(f"{param}: {current_value}", style="green")
         
-        # Add frequency_penalty if it's not already in default_parameters
         if "frequency_penalty" not in self.default_parameters:
             console.print(f"frequency_penalty: {self.parameters.get('frequency_penalty', self.parameters.get('repeat_penalty', 1.1))}", style="green")
         
@@ -416,7 +405,6 @@ class OllamaChatSession(ChatProvider):
             elif param == "verbose":
                 value = str(value).lower() == "true"
             
-            # Handle the special case for repeat_penalty and frequency_penalty
             if param in ["repeat_penalty", "frequency_penalty"]:
                 self.parameters["repeat_penalty"] = value
                 self.parameters["frequency_penalty"] = value
@@ -470,7 +458,7 @@ class OllamaChatSession(ChatProvider):
                     return None
 
     def set_parameter(self, param: str, value: Any):
-        if param in self.default_parameters or param == "repeat_penalty":  # Allow repeat_penalty
+        if param in self.default_parameters or param == "repeat_penalty":
             if param in ["num_predict", "top_k", "repeat_last_n", "num_ctx"]:
                 value = int(value)
             elif param in ["top_p", "temperature", "repeat_penalty", "frequency_penalty"]:
@@ -480,7 +468,6 @@ class OllamaChatSession(ChatProvider):
             elif param == "verbose":
                 value = str(value).lower() == "true"
             
-            # Map repeat_penalty to frequency_penalty for OpenAI
             if param == "repeat_penalty" and isinstance(self, OpenAIChatSession):
                 param = "frequency_penalty"
             
@@ -547,7 +534,6 @@ class AnthropicChatSession(ChatProvider):
                 if not messages or messages[-1]["role"] != msg.role:
                     messages.append({"role": msg.role, "content": msg.content})
                 else:
-                    # If the roles are the same, combine the contents
                     messages[-1]["content"] += "\n" + msg.content
         return messages
 
@@ -825,7 +811,6 @@ class DocumentManager:
             console.print(f"-> Adding new documents: {len(new_chunks)}", style="cyan")
             new_chunk_ids = [chunk.metadata["id"] for chunk in new_chunks]
             db.add_documents(new_chunks, ids=new_chunk_ids)
-            # Remove the db.persist() call as it's no longer needed
         else:
             console.print("[OK] No new documents to add", style="green")
 
@@ -852,17 +837,14 @@ class DocumentManager:
 
     def query_documents(self, folder_name: str, query: str) -> List[Document]:
         db = Chroma(persist_directory=self.chroma_path, embedding_function=self.embedding_function)
-        # First, retrieve all documents
         all_docs = db.get()
         
-        # Filter the documents based on the folder name
         folder_docs_ids = [doc_id for doc_id in all_docs['ids'] if doc_id.startswith(f"{folder_name}/")]
         
         if not folder_docs_ids:
             console.print(f"No documents found for folder '{folder_name}'", style="yellow")
             return []
         
-        # Perform the similarity search on the filtered set of documents
         results = db.similarity_search(
             query,
             k=min(5, len(folder_docs_ids)),
@@ -937,7 +919,6 @@ class ChatApp:
             missed_commits = get_missed_commits("DefamationStation", "Retrochat-v2", "retrochat.py", self.last_commit_hash)
             for i, commit_message in enumerate(missed_commits, 1):
                 console.print(f"{i}. {commit_message}", style="yellow")
-            # Reset the updated status
             set_key(ENV_FILE, "UPDATED", "false")
             self.updated = False
         elif self.last_commit_message:
@@ -1000,7 +981,6 @@ class ChatApp:
         return None
 
     async def select_anthropic_model(self) -> str:
-        # For now, we only have one Anthropic model
         return "claude-3-5-sonnet-20240620"
 
     async def select_openai_model(self) -> str:
@@ -1015,24 +995,20 @@ class ChatApp:
         set_key(ENV_FILE, LAST_CHAT_NAME_KEY, chat_name)
 
     async def edit_conversation(self, session: ChatProvider):
-        # Convert chat history to a string
         chat_text = ""
         for msg in session.chat_history:
             chat_text += f"{msg.role.upper()}:\n{msg.content}\n\n"
 
-        # Create a temporary file with the chat history
         with tempfile.NamedTemporaryFile(mode='w+', suffix='.txt', delete=False, encoding='utf-8') as temp_file:
             temp_file.write(chat_text)
             temp_file_path = temp_file.name
 
-        # Determine the appropriate editor command
         if platform.system() == 'Windows':
             editor_cmd = ['notepad.exe', temp_file_path]
         else:
             editor = os.environ.get('EDITOR', 'nano')
             editor_cmd = [editor, temp_file_path]
 
-        # Open the text editor
         try:
             subprocess.run(editor_cmd, check=True)
         except subprocess.CalledProcessError:
@@ -1042,19 +1018,15 @@ class ChatApp:
             console.print("After editing, press Enter to continue.", style="cyan")
             input()
 
-        # Read the edited content
         try:
             with open(temp_file_path, 'r', encoding='utf-8') as file:
                 edited_content = file.read()
         except UnicodeDecodeError:
-            # If UTF-8 fails, try with the system's default encoding
             with open(temp_file_path, 'r') as file:
                 edited_content = file.read()
 
-        # Remove the temporary file
         os.unlink(temp_file_path)
 
-        # Parse the edited content back into chat history
         new_history = []
         current_role = None
         current_content = []
@@ -1072,7 +1044,6 @@ class ChatApp:
         if current_role is not None:
             new_history.append(ChatMessage(role=current_role, content='\n'.join(current_content).strip()))
 
-        # Update the session's chat history
         session.chat_history = new_history
         session.save_history()
         console.print("Chat history updated successfully.", style="cyan")
@@ -1106,7 +1077,6 @@ class ChatApp:
 
         if new_session:
             self.apply_saved_parameters(new_session)
-            # Save the new provider and model
             self.save_last_provider_and_model(provider, selected_model)
             return new_session
         return None
@@ -1168,11 +1138,8 @@ class ChatApp:
         Answer:
         """
 
-        #console.print(f"Sending query to AI model...", style="cyan")
-        #console.print(f"Query: {query}", style="cyan")
         response = await self.current_session.send_message(prompt)
         
-        # Store the context and prompt for later use
         self.last_query_context = context
         self.last_query_prompt = prompt
 
@@ -1192,30 +1159,24 @@ class ChatApp:
             console.clear()
             console.print("Welcome to Retrochat! [bold green]v1.0.9[/bold green]", style="bold green")
             
-            # Check for setup
             check_and_setup()
             
-            # Check for updates
             if check_for_updates():
-                return  # Exit if updated
+                return
 
-            # Try to create a session from the last saved provider and model
             self.current_session = await self.create_session_from_last()
             
-            # If that fails, switch to a new provider
             if not self.current_session:
                 self.current_session = await self.switch_provider()
             
             if not self.current_session:
                 return
 
-            # Load the last active chat
             chat_history, system_message, parameters = self.load_last_chat()
             self.current_session.chat_history = chat_history
             self.current_session.system_message = system_message
             self.apply_saved_parameters(self.current_session)
             
-            # Display non-default parameters
             self.display_non_default_parameters()
 
             if not chat_history:
@@ -1223,7 +1184,6 @@ class ChatApp:
             else:
                 self.current_session.display_history()
 
-            # Display provider and model information
             provider_name = type(self.current_session).__name__.replace('ChatSession', '')
             model_name = getattr(self.current_session, 'model', 'Unknown')
             console.print(f"Current provider: [blue]{provider_name}[/blue]", style="cyan")
@@ -1277,10 +1237,10 @@ class ChatApp:
             with patch_stdout():
                 line = await prompt_session.prompt_async(prompt, multiline=False)
             
-            if not line and lines:  # Empty line finishes input if there's already content
+            if not line and lines:
                 break
             elif line.endswith('...'):
-                lines.append(line[:-3])  # Remove the '...' and add to lines
+                lines.append(line[:-3])
             else:
                 lines.append(line)
                 if not line.endswith('...'):
@@ -1309,7 +1269,6 @@ def check_for_updates():
     repo_name = "Retrochat-v2"
     file_path = "retrochat.py"
 
-    # Load the last commit hash from the .env file
     load_dotenv(ENV_FILE)
     last_commit_hash = os.getenv("LAST_COMMIT_HASH", "")
 
@@ -1326,7 +1285,6 @@ def check_for_updates():
         console.print("You're running the latest version.", style="green")
         return False
 
-    # Fetch missed commits
     missed_commits = get_missed_commits(repo_owner, repo_name, file_path, last_commit_hash)
 
     url = f"https://raw.githubusercontent.com/{repo_owner}/{repo_name}/{latest_commit_hash}/{file_path}"
