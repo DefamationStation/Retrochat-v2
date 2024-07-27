@@ -18,6 +18,7 @@ RetroChat is a powerful command-line interface for interacting with various AI l
 - **Token Counting**: Display token usage for messages and entire conversations.
 - **Environment Variable Management**: Securely store and manage API keys and other settings.
 - **Cross-Platform Support**: Works on Windows, macOS, and Linux.
+- **Document Loading and Querying**: Load documents from local folders and query them using AI models.
 
 ## Installation
 
@@ -40,9 +41,11 @@ To run RetroChat, you need Python 3.7 or higher installed on your system. Follow
 ## Usage
 
 After installation, you can start RetroChat by running the shortcut command:
+
 ```
 rchat
 ```
+
 This command can be used from any directory in your terminal.
 
 ## Commands
@@ -60,9 +63,20 @@ RetroChat supports various commands to manage your chat sessions and settings:
 - `/set <parameter> <value>` - Set a parameter
 - `/edit` - Edit the entire conversation
 - `/show length` - Display the total conversation tokens
+- `/show context` - Display the context of the last query
 - `/switch` - Switch to a different provider or model
 - `/help` - Display the help message
 - `/exit` - Exit the program
+- `/load <folder_name>` - Load documents from a specified folder
+- `@<folder_name> <query>` - Query loaded documents from a specific folder
+
+## Document Loading and Querying
+
+RetroChat now supports loading and querying documents:
+
+- Use `/load <folder_name>` to load documents from a specific folder in your `.retrochat` directory.
+- Query loaded documents using `@<folder_name> <your question>`.
+- Supported file types include .txt, .pdf, .doc, .docx, and .md.
 
 ## Configuration
 
