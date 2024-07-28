@@ -25,10 +25,10 @@ ATTENTION: RAG only works with nomic-embed-text currently, all you need to do is
 
 To run RetroChat, you need Python 3.7 or higher installed on your system. [Link to Python 3.12 from the MS store.](https://apps.microsoft.com/detail/9ncvdn91xzqp?hl=en-US&gl=US) Follow these steps to set up the environment:
 
-1. Download `retrochat.py` and the `requirements.txt` files and either run them from anywhere or place them in the user/.retrochat directory.
+1. Download `retrochat.py` and the `requirements.txt` files and either run them from anywhere or place them in the C:\Users\<you username\.retrochat directory.
 2. Navigate to the project directory or right-click in the directory and select 'Open in Terminal'.
    ```
-   cd path/to/retrochat
+   cd C:\Users\<you username\.retrochat
    ```
 3. Install the required packages:
    ```
