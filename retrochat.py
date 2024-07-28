@@ -987,7 +987,7 @@ class ChatApp:
         console.print("Available OpenAI models:", style="cyan")
         for idx, model in enumerate(models):
             console.print(f"{idx + 1}. {model}", style="green")
-        choice = Prompt.ask("Select a model number", choices=[str(i) for i in range(1, len(models) + 1)])
+        choice = Prompt.ask("Select a model number")
         return models[int(choice) - 1]
 
     def save_last_chat_name(self, chat_name: str):
