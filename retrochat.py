@@ -1050,7 +1050,7 @@ class ChatApp:
         session.display_history()
 
     async def switch_provider(self):
-        console.print("Select the mode:\n1. Ollama\n2. Anthropic\n3. OpenAI", style="cyan")
+        console.print("Select provider:\n1. Ollama\n2. Anthropic\n3. OpenAI", style="cyan")
         mode = Prompt.ask("Enter your choice", choices=["1", "2", "3"])
 
         if mode == '1':
