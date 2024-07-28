@@ -21,12 +21,11 @@ from dotenv import load_dotenv, set_key
 import shutil
 import tiktoken
 from langchain_chroma import Chroma
-from langchain.document_loaders import TextLoader, UnstructuredWordDocumentLoader, UnstructuredMarkdownLoader, PyPDFDirectoryLoader
-from langchain.document_loaders.base import BaseLoader
+from langchain_community.document_loaders import TextLoader, UnstructuredWordDocumentLoader, UnstructuredMarkdownLoader, PyPDFDirectoryLoader
+from langchain_community.document_loaders.base import BaseLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain.schema.document import Document
-from langchain_community.embeddings import SentenceTransformerEmbeddings
-from langchain.embeddings import OllamaEmbeddings
+from langchain_core.documents import Document
+from langchain_community.embeddings import SentenceTransformerEmbeddings, OllamaEmbeddings
 
 USER_HOME = os.path.expanduser('~')
 RETROCHAT_DIR = os.path.join(USER_HOME, '.retrochat')
