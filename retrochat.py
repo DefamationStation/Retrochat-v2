@@ -971,7 +971,7 @@ class ChatApp:
                         console.print("Available Ollama models:", style="cyan")
                         for idx, model in enumerate(model_names):
                             console.print(f"{idx + 1}. {model}", style="green")
-                        choice = Prompt.ask("Select a model number", choices=[str(i) for i in range(1, len(model_names) + 1)])
+                        choice = Prompt.ask("Select a model")
                         return model_names[int(choice) - 1]
                     else:
                         console.print("Unexpected API response structure.", style="bold red")
@@ -1050,7 +1050,7 @@ class ChatApp:
 
     async def switch_provider(self):
         console.print("Select provider:\n1. Ollama\n2. Anthropic\n3. OpenAI", style="cyan")
-        mode = Prompt.ask("Enter your choice", choices=["1", "2", "3"])
+        mode = Prompt.ask("Enter your choice")
 
         if mode == '1':
             if not self.ensure_ollama_connection():
