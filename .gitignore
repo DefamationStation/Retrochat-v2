@@ -11,3 +11,4 @@ retrochat_env/
 .venv/
 __pycache__/hook-tiktoken.cpython-312.pyc
 build/
+/rules
