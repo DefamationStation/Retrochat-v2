@@ -914,7 +914,6 @@ class ChatApp:
     
     def display_update_message(self):
         if self.updated:
-            console.print("Updates installed in the last run:", style="bold cyan")
             missed_commits = get_missed_commits("DefamationStation", "Retrochat-v2", "retrochat.py", self.last_commit_hash)
             for i, commit_message in enumerate(missed_commits, 1):
                 console.print(f"{i}. {commit_message}", style="yellow")
