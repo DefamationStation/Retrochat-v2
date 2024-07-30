@@ -918,11 +918,8 @@ class ChatApp:
             missed_commits = get_missed_commits("DefamationStation", "Retrochat-v2", "retrochat.py", self.last_commit_hash)
             for i, commit_message in enumerate(missed_commits, 1):
                 console.print(f"{i}. {commit_message}", style="yellow")
-            set_key(ENV_FILE, "UPDATED", "false")
+            set_key(self.ENV_FILE, "UPDATED", "false")
             self.updated = False
-        elif self.last_commit_message:
-            console.print("Latest commit message:", style="bold cyan")
-            console.print(self.last_commit_message, style="yellow")
 
     def ensure_api_key(self, key_name: str, env_var: str):
         if not getattr(self, key_name):
@@ -1157,11 +1154,15 @@ class ChatApp:
         try:
             console.clear()
             console.print("Welcome to Retrochat! [bold green]v1.0.9[/bold green]", style="bold green")
+            console.print("Initializing...", style="cyan")
             
             check_and_setup()
             
-            if check_for_updates():
+            # Perform update check after displaying welcome message
+            if await self.check_for_updates():
                 return
+
+            self.display_update_message()
 
             self.current_session = await self.create_session_from_last()
             
@@ -1246,6 +1247,65 @@ class ChatApp:
                     break
         
         return '\n'.join(lines)
+    
+    async def check_for_updates(self):
+        repo_owner = "DefamationStation"
+        repo_name = "Retrochat-v2"
+        file_path = "retrochat.py"
+
+        load_dotenv(self.ENV_FILE)
+        last_commit_hash = os.getenv("LAST_COMMIT_HASH", "")
+
+        url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/commits?path={file_path}&page=1&per_page=1"
+        response = requests.get(url)
+        if response.status_code != 200:
+            console.print(f"Failed to check for updates: {response.status_code}", style="bold red")
+            return False
+
+        latest_commit = response.json()[0]
+        latest_commit_hash = latest_commit['sha']
+
+        if latest_commit_hash == last_commit_hash:
+            console.print("You're running the latest version.", style="green")
+            return False
+
+        missed_commits = get_missed_commits(repo_owner, repo_name, file_path, last_commit_hash)
+
+        url = f"https://raw.githubusercontent.com/{repo_owner}/{repo_name}/{latest_commit_hash}/{file_path}"
+        response = requests.get(url)
+        if response.status_code != 200:
+            console.print(f"Failed to fetch the latest version: {response.status_code}", style="bold red")
+            return False
+
+        latest_content = response.text
+
+        with open(__file__, 'r') as f:
+            current_content = f.read()
+
+        if hashlib.sha256(current_content.encode()).hexdigest() != hashlib.sha256(latest_content.encode()).hexdigest():
+            console.print("Updates are available:", style="bold yellow")
+            for i, commit_message in enumerate(missed_commits, 1):
+                console.print(f"{i}. {commit_message}", style="yellow")
+            
+            console.print("\nDo you want to update?\n\n1. Yes\n2. No")
+            choice = Prompt.ask("", choices=["1", "2"])
+
+            if choice == "1":
+                console.print("Updating...", style="cyan")
+                with open(__file__, 'w') as f:
+                    f.write(latest_content)
+                set_key(self.ENV_FILE, "LAST_COMMIT_HASH", latest_commit_hash)
+                set_key(self.ENV_FILE, "UPDATED", "true")
+                console.print("Update complete. Please restart the script.", style="bold green")
+                return True
+            else:
+                console.print("Update skipped. Running current version.", style="yellow")
+                return False
+        else:
+            console.print("You're running the latest version.", style="green")
+            set_key(self.ENV_FILE, "LAST_COMMIT_HASH", latest_commit_hash)
+            set_key(self.ENV_FILE, "UPDATED", "false")
+            return False
 
 def get_missed_commits(repo_owner, repo_name, file_path, last_commit_hash):
     url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/commits?path={file_path}"
@@ -1262,65 +1322,6 @@ def get_missed_commits(repo_owner, repo_name, file_path, last_commit_hash):
         missed_commits.append(commit['commit']['message'])
     
     return missed_commits
-
-def check_for_updates():
-    repo_owner = "DefamationStation"
-    repo_name = "Retrochat-v2"
-    file_path = "retrochat.py"
-
-    load_dotenv(ENV_FILE)
-    last_commit_hash = os.getenv("LAST_COMMIT_HASH", "")
-
-    url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/commits?path={file_path}&page=1&per_page=1"
-    response = requests.get(url)
-    if response.status_code != 200:
-        console.print(f"Failed to check for updates: {response.status_code}", style="bold red")
-        return False
-
-    latest_commit = response.json()[0]
-    latest_commit_hash = latest_commit['sha']
-
-    if latest_commit_hash == last_commit_hash:
-        console.print("You're running the latest version.", style="green")
-        return False
-
-    missed_commits = get_missed_commits(repo_owner, repo_name, file_path, last_commit_hash)
-
-    url = f"https://raw.githubusercontent.com/{repo_owner}/{repo_name}/{latest_commit_hash}/{file_path}"
-    response = requests.get(url)
-    if response.status_code != 200:
-        console.print(f"Failed to fetch the latest version: {response.status_code}", style="bold red")
-        return False
-
-    latest_content = response.text
-
-    with open(__file__, 'r') as f:
-        current_content = f.read()
-
-    if hashlib.sha256(current_content.encode()).hexdigest() != hashlib.sha256(latest_content.encode()).hexdigest():
-        console.print("Updates are available:", style="bold yellow")
-        for i, commit_message in enumerate(missed_commits, 1):
-            console.print(f"{i}. {commit_message}", style="yellow")
-        
-        console.print("\nDo you want to update?\n\n1. Yes\n2. No")
-        choice = Prompt.ask("", choices=["1", "2"])
-
-        if choice == "1":
-            console.print("Updating...", style="cyan")
-            with open(__file__, 'w') as f:
-                f.write(latest_content)
-            set_key(ENV_FILE, "LAST_COMMIT_HASH", latest_commit_hash)
-            set_key(ENV_FILE, "UPDATED", "true")
-            console.print("Update complete. Please restart the script.", style="bold green")
-            return True
-        else:
-            console.print("Update skipped. Running current version.", style="yellow")
-            return False
-    else:
-        console.print("You're running the latest version.", style="green")
-        set_key(ENV_FILE, "LAST_COMMIT_HASH", latest_commit_hash)
-        set_key(ENV_FILE, "UPDATED", "false")
-        return False
 
 async def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--setup":
