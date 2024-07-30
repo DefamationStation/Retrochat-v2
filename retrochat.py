@@ -1153,7 +1153,6 @@ class ChatApp:
         try:
             console.clear()
             console.print("Welcome to Retrochat! [bold green]v1.0.9[/bold green]", style="bold green")
-            console.print("Initializing...", style="cyan")
             
             check_and_setup()
             
