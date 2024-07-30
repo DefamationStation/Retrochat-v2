@@ -983,7 +983,7 @@ class ChatApp:
         return "claude-3-5-sonnet-20240620"
 
     async def select_openai_model(self) -> str:
-        models = ["gpt-4o-mini", "gpt-4o"]
+        models = ["gpt-4o-mini", "gpt-4o", "gpt-4o-64k-output-alpha"]
         console.print("Available OpenAI models:", style="cyan")
         for idx, model in enumerate(models):
             console.print(f"{idx + 1}. {model}", style="green")
