@@ -976,7 +976,16 @@ class ChatApp:
         return None
 
     async def select_anthropic_model(self) -> str:
-        return "claude-3-5-sonnet-20240620"
+        models = ["claude-3-5-sonnet-20240620"]
+        console.print("Available Anthropic models:", style="cyan")
+        for idx, model in enumerate(models):
+            console.print(f"{idx + 1}. {model}", style="green")
+        choice = Prompt.ask("Select a model number")
+        try:
+            return models[int(choice) - 1]
+        except (ValueError, IndexError):
+            console.print("Invalid selection. Please try again.", style="bold red")
+            return None
 
     async def select_openai_model(self) -> str:
         models = ["gpt-4o-mini", "gpt-4o", "gpt-4o-64k-output-alpha"]
@@ -1061,14 +1070,23 @@ class ChatApp:
             if not self.ensure_api_key('anthropic_api_key', ANTHROPIC_API_KEY_NAME):
                 return None
             selected_model = await self.select_anthropic_model()
-            new_session = self.provider_factory.create_provider('Anthropic', self.anthropic_api_key, "https://api.anthropic.com/v1/messages", self.history_manager, selected_model)
+            if not selected_model:
+                return None
+            new_session = self.provider_factory.create_provider('Anthropic', self.anthropic_api_key,
+    "https://api.anthropic.com/v1/messages", self.history_manager, selected_model)
             provider = 'Anthropic'
         elif mode == '3':
             if not self.ensure_api_key('openai_api_key', OPENAI_API_KEY_NAME):
                 return None
             selected_model = await self.select_openai_model()
-            new_session = self.provider_factory.create_provider('OpenAI', self.openai_api_key, "https://api.openai.com/v1/chat/completions", selected_model, self.history_manager)
+            if not selected_model:
+                return None
+            new_session = self.provider_factory.create_provider('OpenAI', self.openai_api_key,
+    "https://api.openai.com/v1/chat/completions", selected_model, self.history_manager)
             provider = 'OpenAI'
+        else:
+            console.print("Invalid choice. Please select 1, 2, or 3.", style="bold red")
+            return None
 
         if new_session:
             self.apply_saved_parameters(new_session)
@@ -1152,7 +1170,7 @@ class ChatApp:
     async def start(self):
         try:
             console.clear()
-            console.print("Welcome to Retrochat! [bold green]v1.0.9[/bold green]", style="bold green")
+            console.print("Welcome to Retrochat! [bold green]v1.1.0[/bold green]", style="bold green")
             
             check_and_setup()
             
