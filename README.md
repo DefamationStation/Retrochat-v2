@@ -1,4 +1,4 @@
-Discord: https://discord.gg/qKjUVQe2
+[Discord](https://discord.gg/qKjUVQe2)
 # RetroChat
 ![RetroChat Screenshot](https://i.imgur.com/5hh7cVb.png)
 RetroChat is a powerful command-line interface for interacting with various AI language models. It provides a seamless experience for engaging with different chat providers while offering robust features for managing and customizing your conversations.
