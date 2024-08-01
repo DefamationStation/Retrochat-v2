@@ -39,7 +39,7 @@ To run RetroChat, you need Python 3.7 or higher installed on your system. [Link 
    ```
    python retrochat.py --setup
    ```
-
+NOTE: If chromadb doesn't properly install for you, all you need to do is download and install [Microsoft Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) and after installing that navigate to the individual components and install MSVC v143 - VS 2022 C++ x64/x86 build tools (Latest) and Windows 11 SDK (10.0.22621.0)
 ## Usage
 
 After installation, you can start RetroChat by running the shortcut command:
