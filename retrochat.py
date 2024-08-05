@@ -14,6 +14,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
 from prompt_toolkit import PromptSession
+from prompt_toolkit import PromptSession
+from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
 from rich.prompt import Prompt
@@ -1170,7 +1172,7 @@ class ChatApp:
     async def start(self):
         try:
             console.clear()
-            console.print("Welcome to Retrochat! [bold green]v1.1.0[/bold green]", style="bold green")
+            console.print("Welcome to Retrochat! [bold green]v1.1.1[/bold green]", style="bold green")
             
             check_and_setup()
             
@@ -1241,28 +1243,30 @@ class ChatApp:
                 self.current_session.save_history()
 
     async def get_multiline_input(self) -> str:
-        lines = []
-        prompt_session = PromptSession()
-        
-        while True:
-            if not lines:
-                prompt = "> "
+        kb = KeyBindings()
+
+        @kb.add('c-j')  # Ctrl+J as a workaround for Ctrl+Enter
+        def _(event):
+            event.current_buffer.insert_text('\n')
+
+        @kb.add('enter')  # Enter key
+        def _(event):
+            if event.current_buffer.document.is_cursor_at_the_end:
+                event.current_buffer.validate_and_handle()
             else:
-                prompt = "... "
-            
+                event.current_buffer.insert_text('\n')
+
+        prompt_session = PromptSession(multiline=True, key_bindings=kb)
+
+        try:
             with patch_stdout():
-                line = await prompt_session.prompt_async(prompt, multiline=False)
-            
-            if not line and lines:
-                break
-            elif line.endswith('...'):
-                lines.append(line[:-3])
-            else:
-                lines.append(line)
-                if not line.endswith('...'):
-                    break
-        
-        return '\n'.join(lines)
+                user_input = await prompt_session.prompt_async(
+                    "",  # No prompt message
+                    bottom_toolbar=None  # No bottom toolbar message
+                )
+            return user_input.strip()
+        except (EOFError, KeyboardInterrupt):
+            return ""
     
     async def check_for_updates(self):
         repo_owner = "DefamationStation"
