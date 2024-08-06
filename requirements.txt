@@ -11,3 +11,4 @@ langchain-text-splitters
 unstructured
 pypdf
 chromadb
+google.generativeai

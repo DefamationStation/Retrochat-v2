@@ -10,6 +10,13 @@ import tempfile
 import subprocess
 import hashlib
 import platform
+import google.generativeai as genai
+import shutil
+import tiktoken
+import warnings
+import contextlib
+import io
+from google.api_core import client_options as client_options_lib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
@@ -20,14 +27,19 @@ from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
 from rich.prompt import Prompt
 from dotenv import load_dotenv, set_key
-import shutil
-import tiktoken
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import TextLoader, UnstructuredWordDocumentLoader, UnstructuredMarkdownLoader, PyPDFDirectoryLoader
 from langchain_community.document_loaders.base import BaseLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from langchain_community.embeddings import SentenceTransformerEmbeddings, OllamaEmbeddings
+
+class SuppressLogging:
+    def __enter__(self):
+        logging.disable(logging.CRITICAL)
+
+    def __exit__(self, exit_type, exit_value, exit_traceback):
+        logging.disable(logging.NOTSET)
 
 USER_HOME = os.path.expanduser('~')
 RETROCHAT_DIR = os.path.join(USER_HOME, '.retrochat')
@@ -36,6 +48,7 @@ DB_FILE = os.path.join(RETROCHAT_DIR, 'chat_history.db')
 SETTINGS_FILE = os.path.join(RETROCHAT_DIR, 'settings.json')
 ANTHROPIC_API_KEY_NAME = "ANTHROPIC_API_KEY"
 OPENAI_API_KEY_NAME = "OPENAI_API_KEY"
+GOOGLE_API_KEY_NAME = "GOOGLE_API_KEY"
 LAST_CHAT_NAME_KEY = "LAST_CHAT_NAME"
 OLLAMA_IP_KEY = "OLLAMA_IP"
 OLLAMA_PORT_KEY = "OLLAMA_PORT"
@@ -335,7 +348,7 @@ class ChatProvider(ABC):
 
     def set_parameter(self, param: str, value: Any):
         if param in self.default_parameters or param in ["repeat_penalty", "frequency_penalty"]:
-            if param in ["num_predict", "top_k", "repeat_last_n", "num_ctx"]:
+            if param in ["num_predict", "top_k", "repeat_last_n", "num_ctx", "candidate_count", "max_tokens"]:
                 value = int(value)
             elif param in ["top_p", "temperature", "repeat_penalty", "frequency_penalty"]:
                 value = float(value)
@@ -354,6 +367,8 @@ class ChatProvider(ABC):
             
             if param != "verbose" or value:
                 console.print(f"Parameter '{param}' set to {value}", style="cyan")
+                if param == "max_tokens":
+                    console.print("(This will be sent as max_output_tokens to the Gemini API)", style="yellow")
         else:
             console.print(f"Invalid parameter: {param}", style="bold red")
 
@@ -361,7 +376,10 @@ class ChatProvider(ABC):
         console.print("Current Parameters:", style="cyan")
         for param, default_value in self.default_parameters.items():
             current_value = self.parameters.get(param, default_value)
-            console.print(f"{param}: {current_value}", style="green")
+            if param == "max_tokens":
+                console.print(f"max_tokens: {current_value} (sent as max_output_tokens to Gemini API)", style="green")
+            else:
+                console.print(f"{param}: {current_value}", style="green")
         
         if "frequency_penalty" not in self.default_parameters:
             console.print(f"frequency_penalty: {self.parameters.get('frequency_penalty', self.parameters.get('repeat_penalty', 1.1))}", style="green")
@@ -599,6 +617,103 @@ class OpenAIChatSession(ChatProvider):
                 else:
                     console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
                     return None
+                
+class GoogleChatSession(ChatProvider):
+    def __init__(self, api_key: str, model: str, history_manager: ChatHistoryManager):
+        super().__init__(history_manager)
+        self.api_key = api_key
+        self.model = model
+        
+        # Suppress warnings and logging
+        warnings.filterwarnings("ignore", category=UserWarning)
+        logging.getLogger("google.generativeai").setLevel(logging.CRITICAL)
+        os.environ["GRPC_PYTHON_LOG_LEVEL"] = "error"
+        os.environ["GRPC_VERBOSITY"] = "ERROR"
+        os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+        
+        # Configure the Google AI library
+        with SuppressLogging():
+            client_options = client_options_lib.ClientOptions(
+                api_endpoint="generativelanguage.googleapis.com"
+            )
+            genai.configure(api_key=self.api_key, client_options=client_options)
+            
+            self.genai_model = genai.GenerativeModel(self.model)
+            self.chat = self.genai_model.start_chat(history=[])
+
+        self.default_parameters.update({
+            "candidate_count": 1,
+            "max_tokens": 8192,
+            "temperature": 0.8,
+        })
+
+    async def send_message(self, message: str):
+        self.add_to_history("user", message)
+        
+        generation_config = genai.types.GenerationConfig(
+            candidate_count=self.parameters.get("candidate_count", 1),
+            max_output_tokens=self.parameters.get("max_tokens", 8192),
+            temperature=self.parameters.get("temperature", 0.8),
+        )
+
+        with SuppressLogging():
+            response = await asyncio.to_thread(
+                self.chat.send_message,
+                message,
+                generation_config=generation_config,
+                stream=True
+            )
+
+            complete_message = ""
+            for chunk in response:
+                chunk_text = chunk.text
+                complete_message += chunk_text
+                console.print(chunk_text, end="", style="yellow")
+                await asyncio.sleep(0)  # Yield control to allow for responsiveness
+
+        formatted_message = self.format_message(complete_message)
+        self.add_to_history("assistant", formatted_message)
+        
+        if self.parameters.get("verbose", False):
+            tokens = self.calculate_tokens(formatted_message)
+            total_tokens = self.calculate_total_tokens()
+            console.print(f"Response tokens: {tokens}", style="cyan")
+            console.print(f"Total conversation tokens: {total_tokens}", style="cyan")
+        
+        return formatted_message
+
+    def set_system_message(self, message: str):
+        super().set_system_message(message)
+        self.chat = self.genai_model.start_chat(history=[{"role": "system", "parts": [message]}])
+
+    def set_parameter(self, param: str, value: Any):
+        if param in self.default_parameters:
+            if param in ["candidate_count", "max_tokens", "top_k"]:
+                value = int(value)
+            elif param in ["temperature", "top_p"]:
+                value = float(value)
+            elif param == "verbose":
+                value = str(value).lower() == "true"
+            
+            self.parameters[param] = value
+            self.history_manager.save_parameters(self.parameters)
+            
+            if param != "verbose" or value:
+                console.print(f"Parameter '{param}' set to {value}", style="cyan")
+        else:
+            console.print(f"Invalid parameter: {param}", style="bold red")
+
+    def show_parameters(self):
+        console.print("Current Parameters:", style="cyan")
+        for param, default_value in self.default_parameters.items():
+            current_value = self.parameters.get(param, default_value)
+            if param == "max_tokens":
+                console.print(f"max_tokens (max_output_tokens): {current_value}", style="green")
+            else:
+                console.print(f"{param}: {current_value}", style="green")
+        
+        if self.system_message:
+            console.print(f"system: {self.system_message}", style="green")
 
 class ChatProviderFactory:
     @staticmethod
@@ -606,7 +721,8 @@ class ChatProviderFactory:
         providers = {
             'Ollama': OllamaChatSession,
             'Anthropic': AnthropicChatSession,
-            'OpenAI': OpenAIChatSession
+            'OpenAI': OpenAIChatSession,
+            'Google': GoogleChatSession
         }
         provider_class = providers.get(provider_type)
         if provider_class:
@@ -892,6 +1008,7 @@ class ChatApp:
             load_dotenv(ENV_FILE)
             self.openai_api_key = os.getenv(OPENAI_API_KEY_NAME)
             self.anthropic_api_key = os.getenv(ANTHROPIC_API_KEY_NAME)
+            self.google_api_key = os.getenv(GOOGLE_API_KEY_NAME)
             self.chat_name = os.getenv(LAST_CHAT_NAME_KEY, 'default')
             self.ollama_ip = os.getenv(OLLAMA_IP_KEY, 'localhost')
             self.ollama_port = os.getenv(OLLAMA_PORT_KEY, '11434')
@@ -996,6 +1113,14 @@ class ChatApp:
             console.print(f"{idx + 1}. {model}", style="green")
         choice = Prompt.ask("Select a model number")
         return models[int(choice) - 1]
+    
+    async def select_google_model(self) -> str:
+        models = ["gemini-1.5-flash", "gemini-1.5-pro-exp-0801"]
+        console.print("Available Google Gemini models:", style="cyan")
+        for idx, model in enumerate(models):
+            console.print(f"{idx + 1}. {model}", style="green")
+        choice = Prompt.ask("Select a model number")
+        return models[int(choice) - 1]
 
     def save_last_chat_name(self, chat_name: str):
         set_key(ENV_FILE, LAST_CHAT_NAME_KEY, chat_name)
@@ -1056,7 +1181,7 @@ class ChatApp:
         session.display_history()
 
     async def switch_provider(self):
-        console.print("Select provider:\n1. Ollama\n2. Anthropic\n3. OpenAI", style="cyan")
+        console.print("Select provider:\n1. Ollama\n2. Anthropic\n3. OpenAI\n4. Google", style="cyan")
         mode = Prompt.ask("Enter your choice")
 
         if mode == '1':
@@ -1086,8 +1211,17 @@ class ChatApp:
             new_session = self.provider_factory.create_provider('OpenAI', self.openai_api_key,
     "https://api.openai.com/v1/chat/completions", selected_model, self.history_manager)
             provider = 'OpenAI'
+        elif mode == '4':
+            if not self.ensure_api_key('google_api_key', GOOGLE_API_KEY_NAME):
+                return None
+            selected_model = await self.select_google_model()
+            if not selected_model:
+                return None
+            with SuppressLogging():
+                new_session = self.provider_factory.create_provider('Google', self.google_api_key, selected_model, self.history_manager)
+            provider = 'Google'
         else:
-            console.print("Invalid choice. Please select 1, 2, or 3.", style="bold red")
+            console.print("Invalid choice. Please select 1, 2, 3, or 4.", style="bold red")
             return None
 
         if new_session:
@@ -1097,21 +1231,30 @@ class ChatApp:
         return None
     
     async def create_session_from_last(self):
-        if self.last_provider == 'Ollama':
+        new_session = None
+        
+        if self.last_provider == 'Google':
+            if self.last_provider == 'Google':
+                if not self.ensure_api_key('google_api_key', GOOGLE_API_KEY_NAME):
+                    return None
+                with SuppressLogging():
+                    new_session = self.provider_factory.create_provider('Google', self.google_api_key, self.last_model, self.history_manager)
+        elif self.last_provider == 'Ollama':
             if not self.ensure_ollama_connection():
                 return None
             model_url = f"http://{self.ollama_ip}:{self.ollama_port}/api/chat"
-            new_session = self.provider_factory.create_provider('Ollama', model_url, self.last_model, self.history_manager)
+            with contextlib.redirect_stderr(io.StringIO()):
+                new_session = self.provider_factory.create_provider('Ollama', model_url, self.last_model, self.history_manager)
         elif self.last_provider == 'Anthropic':
             if not self.ensure_api_key('anthropic_api_key', ANTHROPIC_API_KEY_NAME):
                 return None
-            new_session = self.provider_factory.create_provider('Anthropic', self.anthropic_api_key, "https://api.anthropic.com/v1/messages", self.history_manager, self.last_model)
+            with contextlib.redirect_stderr(io.StringIO()):
+                new_session = self.provider_factory.create_provider('Anthropic', self.anthropic_api_key, "https://api.anthropic.com/v1/messages", self.history_manager, self.last_model)
         elif self.last_provider == 'OpenAI':
             if not self.ensure_api_key('openai_api_key', OPENAI_API_KEY_NAME):
                 return None
-            new_session = self.provider_factory.create_provider('OpenAI', self.openai_api_key, "https://api.openai.com/v1/chat/completions", self.last_model, self.history_manager)
-        else:
-            return None
+            with contextlib.redirect_stderr(io.StringIO()):
+                new_session = self.provider_factory.create_provider('OpenAI', self.openai_api_key, "https://api.openai.com/v1/chat/completions", self.last_model, self.history_manager)
 
         if new_session:
             self.apply_saved_parameters(new_session)
