@@ -1290,11 +1290,11 @@ class ChatApp:
                 lang = part.split('\n')[0].strip() or "text"
                 code = '\n'.join(part.split('\n')[1:])
                 syntax = Syntax(code, lang, theme="monokai", line_numbers=True)
-                # Use a Panel with a very subtle border
-                formatted_parts.append(Panel(syntax, border_style="dim", padding=(1, 1)))
+                # Add a newline before the code block for extra separation
+                formatted_parts.append("\n")
+                formatted_parts.append(Panel(syntax, border_style="none", padding=(1, 1)))
 
-        # Use a Panel with no border for the overall content
-        return Panel(Group(*formatted_parts), border_style="none")
+        return Group(*formatted_parts)
 
     async def get_multiline_input(self) -> str:
         kb = KeyBindings()
