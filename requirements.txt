@@ -12,3 +12,4 @@ unstructured
 pypdf
 chromadb
 google.generativeai
+anthropic
