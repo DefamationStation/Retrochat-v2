@@ -12,5 +12,4 @@ retrochat_env/
 __pycache__/hook-tiktoken.cpython-312.pyc
 build/
 /rules
-test_retrochat.py
 __pycache__/test_retrochat.cpython-312-pytest-8.3.2.pyc
