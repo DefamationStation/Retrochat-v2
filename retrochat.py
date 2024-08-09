@@ -79,10 +79,17 @@ def setup_rchat():
     shutil.copy2(current_script, RETROCHAT_SCRIPT)
     console.print(f"Copied RetroChat script to {RETROCHAT_SCRIPT}", style="cyan")
     
-    rchat_bat_path = os.path.join(RETROCHAT_DIR, "rchat.bat")
-    with open(rchat_bat_path, "w") as f:
-        f.write(f'@echo off\npython "{RETROCHAT_SCRIPT}" %*')
-    console.print(f"Created rchat.bat at {rchat_bat_path}", style="cyan")
+    if sys.platform.startswith('win'):
+        rchat_bat_path = os.path.join(RETROCHAT_DIR, "rchat.bat")
+        with open(rchat_bat_path, "w") as f:
+            f.write(f'@echo off\npython "{RETROCHAT_SCRIPT}" %*')
+        console.print(f"Created rchat.bat at {rchat_bat_path}", style="cyan")
+    else:  # Mac or Linux
+        rchat_sh_path = os.path.join(RETROCHAT_DIR, "rchat")
+        with open(rchat_sh_path, "w") as f:
+            f.write(f'#!/bin/bash\npython3 "{RETROCHAT_SCRIPT}" "$@"')
+        os.chmod(rchat_sh_path, 0o755)  # Make the script executable
+        console.print(f"Created rchat shell script at {rchat_sh_path}", style="cyan")
     
     if not os.path.exists(ENV_FILE):
         with open(ENV_FILE, "w") as f:
@@ -109,9 +116,9 @@ def setup_rchat():
             console.print(f"Created PATH and added {RETROCHAT_DIR}.", style="cyan")
         finally:
             winreg.CloseKey(key)
-    else:
+    else:  # Mac or Linux
         shell = os.environ.get("SHELL", "").split("/")[-1]
-        rc_file = f".{shell}rc"
+        rc_file = f".{shell}rc" if shell in ['bash', 'zsh'] else ".profile"
         rc_path = os.path.join(USER_HOME, rc_file)
         
         with open(rc_path, "a") as f:
@@ -1136,7 +1143,10 @@ class ChatApp:
 
         if platform.system() == 'Windows':
             editor_cmd = ['notepad.exe', temp_file_path]
-        else:
+        elif platform.system() == 'Darwin':  # macOS
+            editor = os.environ.get('EDITOR', 'open -t')
+            editor_cmd = editor.split() + [temp_file_path]
+        else:  # Linux or other Unix-like systems
             editor = os.environ.get('EDITOR', 'nano')
             editor_cmd = [editor, temp_file_path]
 
