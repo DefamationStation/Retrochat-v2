@@ -16,15 +16,11 @@ import tiktoken
 import warnings
 import contextlib
 import io
-from rich.live import Live
-from rich.markdown import Markdown
-from rich.console import Group
-from rich.panel import Panel
-from rich.syntax import Syntax
 from google.api_core import client_options as client_options_lib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
+from prompt_toolkit import PromptSession
 from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.patch_stdout import patch_stdout
@@ -83,10 +79,17 @@ def setup_rchat():
     shutil.copy2(current_script, RETROCHAT_SCRIPT)
     console.print(f"Copied RetroChat script to {RETROCHAT_SCRIPT}", style="cyan")
     
-    rchat_bat_path = os.path.join(RETROCHAT_DIR, "rchat.bat")
-    with open(rchat_bat_path, "w") as f:
-        f.write(f'@echo off\npython "{RETROCHAT_SCRIPT}" %*')
-    console.print(f"Created rchat.bat at {rchat_bat_path}", style="cyan")
+    if sys.platform.startswith('win'):
+        rchat_bat_path = os.path.join(RETROCHAT_DIR, "rchat.bat")
+        with open(rchat_bat_path, "w") as f:
+            f.write(f'@echo off\npython "{RETROCHAT_SCRIPT}" %*')
+        console.print(f"Created rchat.bat at {rchat_bat_path}", style="cyan")
+    else:  # Mac or Linux
+        rchat_sh_path = os.path.join(RETROCHAT_DIR, "rchat")
+        with open(rchat_sh_path, "w") as f:
+            f.write(f'#!/bin/bash\npython3 "{RETROCHAT_SCRIPT}" "$@"')
+        os.chmod(rchat_sh_path, 0o755)  # Make the script executable
+        console.print(f"Created rchat shell script at {rchat_sh_path}", style="cyan")
     
     if not os.path.exists(ENV_FILE):
         with open(ENV_FILE, "w") as f:
@@ -113,9 +116,9 @@ def setup_rchat():
             console.print(f"Created PATH and added {RETROCHAT_DIR}.", style="cyan")
         finally:
             winreg.CloseKey(key)
-    else:
+    else:  # Mac or Linux
         shell = os.environ.get("SHELL", "").split("/")[-1]
-        rc_file = f".{shell}rc"
+        rc_file = f".{shell}rc" if shell in ['bash', 'zsh'] else ".profile"
         rc_path = os.path.join(USER_HOME, rc_file)
         
         with open(rc_path, "a") as f:
@@ -310,7 +313,7 @@ class ChatProvider(ABC):
             return []
 
     @abstractmethod
-    async def stream_response(self, message: str):
+    async def send_message(self, message: str):
         pass
 
     def add_to_history(self, role: str, content: str):
@@ -416,8 +419,32 @@ class OllamaChatSession(ChatProvider):
             "num_ctx": 8192,
             "stop": None,
         })
+    
+    def set_parameter(self, param: str, value: Any):
+        if param in self.default_parameters or param in ["repeat_penalty", "frequency_penalty"]:
+            if param in ["num_predict", "top_k", "repeat_last_n", "num_ctx"]:
+                value = int(value)
+            elif param in ["top_p", "temperature", "repeat_penalty", "frequency_penalty"]:
+                value = float(value)
+            elif param == "stop":
+                value = value.split() if isinstance(value, str) else value
+            elif param == "verbose":
+                value = str(value).lower() == "true"
+            
+            if param in ["repeat_penalty", "frequency_penalty"]:
+                self.parameters["repeat_penalty"] = value
+                self.parameters["frequency_penalty"] = value
+            else:
+                self.parameters[param] = value
+            
+            self.history_manager.save_parameters(self.parameters)
+            
+            if param != "verbose" or value:
+                console.print(f"Parameter '{param}' set to {value}", style="cyan")
+        else:
+            console.print(f"Invalid parameter: {param}", style="bold red")
 
-    async def stream_response(self, message: str):
+    async def send_message(self, message: str):
         self.add_to_history("user", message)
         messages = [{"role": msg.role, "content": msg.content} for msg in self.chat_history]
         
@@ -434,16 +461,49 @@ class OllamaChatSession(ChatProvider):
         async with aiohttp.ClientSession() as session:
             async with session.post(self.model_url, json=data) as response:
                 if response.status == 200:
+                    complete_message = ""
                     async for line in response.content:
                         if line:
                             response_json = json.loads(line)
                             message_content = response_json.get('message', {}).get('content', '')
-                            if message_content:
-                                yield message_content
+                            complete_message += message_content
+                            console.print(message_content, end="", style="yellow")
                             if response_json.get('done', False):
                                 break
+                    console.print()
+                    formatted_message = self.format_message(complete_message)
+                    self.add_to_history("assistant", formatted_message)
+                    if self.parameters.get("verbose", False):
+                        tokens = self.calculate_tokens(formatted_message)
+                        total_tokens = self.calculate_total_tokens()
+                        console.print(f"Response tokens: {tokens}", style="cyan")
+                        console.print(f"Total conversation tokens: {total_tokens}", style="cyan")
+                    return formatted_message
                 else:
-                    yield f"Error: {response.status} - {await response.text()}"
+                    console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
+                    return None
+
+    def set_parameter(self, param: str, value: Any):
+        if param in self.default_parameters or param == "repeat_penalty":
+            if param in ["num_predict", "top_k", "repeat_last_n", "num_ctx"]:
+                value = int(value)
+            elif param in ["top_p", "temperature", "repeat_penalty", "frequency_penalty"]:
+                value = float(value)
+            elif param == "stop":
+                value = value.split() if isinstance(value, str) else value
+            elif param == "verbose":
+                value = str(value).lower() == "true"
+            
+            if param == "repeat_penalty" and isinstance(self, OpenAIChatSession):
+                param = "frequency_penalty"
+            
+            self.parameters[param] = value
+            self.history_manager.save_parameters(self.parameters)
+            
+            if param != "verbose" or value:
+                console.print(f"Parameter '{param}' set to {value}", style="cyan")
+        else:
+            console.print(f"Invalid parameter: {param}", style="bold red")
 
 class AnthropicChatSession(ChatProvider):
     def __init__(self, api_key: str, model_url: str, history_manager: ChatHistoryManager, model: str):
@@ -452,7 +512,7 @@ class AnthropicChatSession(ChatProvider):
         self.model_url = model_url
         self.model = model
 
-    async def stream_response(self, message: str):
+    async def send_message(self, message: str):
         self.add_to_history("user", message)
         messages = self.prepare_messages()
         
@@ -460,8 +520,7 @@ class AnthropicChatSession(ChatProvider):
             "model": self.model,
             "max_tokens": self.parameters.get("max_tokens", 8192),
             "temperature": self.parameters.get("temperature", 0.8),
-            "messages": messages,
-            "stream": True
+            "messages": messages
         }
 
         if self.system_message:
@@ -473,17 +532,26 @@ class AnthropicChatSession(ChatProvider):
             "anthropic-version": "2023-06-01",
             "anthropic-beta": "max-tokens-3-5-sonnet-2024-07-15"
         }
-
         async with aiohttp.ClientSession() as session:
             async with session.post(self.model_url, json=data, headers=headers) as response:
                 if response.status == 200:
-                    async for line in response.content:
-                        if line:
-                            event = json.loads(line.decode('utf-8'))
-                            if 'content' in event:
-                                yield event['content']
+                    response_json = await response.json()
+                    assistant_message = response_json.get('content', [{}])[0].get('text', '')
+                    if assistant_message:
+                        formatted_message = self.format_message(assistant_message)
+                        self.add_to_history("assistant", formatted_message)
+                        console.print(formatted_message, style="yellow")
+                        if self.parameters.get("verbose", False):
+                            tokens = self.calculate_tokens(formatted_message)
+                            total_tokens = self.calculate_total_tokens()
+                            console.print(f"Response tokens: {tokens}", style="cyan")
+                            console.print(f"Total conversation tokens: {total_tokens}", style="cyan")
+                        return formatted_message
+                    else:
+                        console.print("No response content received.", style="bold red")
                 else:
-                    yield f"Error: {response.status} - {await response.text()}"
+                    console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
+                return None
 
     def prepare_messages(self):
         messages = []
@@ -505,7 +573,7 @@ class OpenAIChatSession(ChatProvider):
             "frequency_penalty": 1.1,
         })
 
-    async def stream_response(self, message: str):
+    async def send_message(self, message: str):
         self.add_to_history("user", message)
         messages = [{"role": msg.role, "content": msg.content} for msg in self.chat_history]
         
@@ -525,10 +593,10 @@ class OpenAIChatSession(ChatProvider):
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}"
         }
-
         async with aiohttp.ClientSession() as session:
             async with session.post(self.base_url, headers=headers, json=data) as response:
                 if response.status == 200:
+                    complete_message = ""
                     async for line in response.content:
                         if line:
                             line = line.decode('utf-8').strip()
@@ -540,12 +608,23 @@ class OpenAIChatSession(ChatProvider):
                                     response_json = json.loads(json_str)
                                     content = response_json['choices'][0]['delta'].get('content', '')
                                     if content:
-                                        yield content
+                                        complete_message += content
+                                        console.print(content, end="", style="yellow")
                                 except json.JSONDecodeError:
                                     continue
+                    console.print()
+                    formatted_message = self.format_message(complete_message)
+                    self.add_to_history("assistant", formatted_message)
+                    if self.parameters.get("verbose", False):
+                        tokens = self.calculate_tokens(formatted_message)
+                        total_tokens = self.calculate_total_tokens()
+                        console.print(f"Response tokens: {tokens}", style="cyan")
+                        console.print(f"Total conversation tokens: {total_tokens}", style="cyan")
+                    return formatted_message
                 else:
-                    yield f"Error: {response.status} - {await response.text()}"
-
+                    console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
+                    return None
+                
 class GoogleChatSession(ChatProvider):
     def __init__(self, api_key: str, model: str, history_manager: ChatHistoryManager):
         super().__init__(history_manager)
@@ -575,7 +654,7 @@ class GoogleChatSession(ChatProvider):
             "temperature": 0.8,
         })
 
-    async def stream_response(self, message: str):
+    async def send_message(self, message: str):
         self.add_to_history("user", message)
         
         generation_config = genai.types.GenerationConfig(
@@ -592,12 +671,56 @@ class GoogleChatSession(ChatProvider):
                 stream=True
             )
 
+            complete_message = ""
             for chunk in response:
-                yield chunk.text
+                chunk_text = chunk.text
+                complete_message += chunk_text
+                console.print(chunk_text, end="", style="yellow")
+                await asyncio.sleep(0)  # Yield control to allow for responsiveness
+
+        formatted_message = self.format_message(complete_message)
+        self.add_to_history("assistant", formatted_message)
+        
+        if self.parameters.get("verbose", False):
+            tokens = self.calculate_tokens(formatted_message)
+            total_tokens = self.calculate_total_tokens()
+            console.print(f"Response tokens: {tokens}", style="cyan")
+            console.print(f"Total conversation tokens: {total_tokens}", style="cyan")
+        
+        return formatted_message
 
     def set_system_message(self, message: str):
         super().set_system_message(message)
         self.chat = self.genai_model.start_chat(history=[{"role": "system", "parts": [message]}])
+
+    def set_parameter(self, param: str, value: Any):
+        if param in self.default_parameters:
+            if param in ["candidate_count", "max_tokens", "top_k"]:
+                value = int(value)
+            elif param in ["temperature", "top_p"]:
+                value = float(value)
+            elif param == "verbose":
+                value = str(value).lower() == "true"
+            
+            self.parameters[param] = value
+            self.history_manager.save_parameters(self.parameters)
+            
+            if param != "verbose" or value:
+                console.print(f"Parameter '{param}' set to {value}", style="cyan")
+        else:
+            console.print(f"Invalid parameter: {param}", style="bold red")
+
+    def show_parameters(self):
+        console.print("Current Parameters:", style="cyan")
+        for param, default_value in self.default_parameters.items():
+            current_value = self.parameters.get(param, default_value)
+            if param == "max_tokens":
+                console.print(f"max_tokens (max_output_tokens): {current_value}", style="green")
+            else:
+                console.print(f"{param}: {current_value}", style="green")
+        
+        if self.system_message:
+            console.print(f"system: {self.system_message}", style="green")
 
 class ChatProviderFactory:
     @staticmethod
@@ -975,7 +1098,7 @@ class ChatApp:
                     else:
                         console.print("Unexpected API response structure.", style="bold red")
                 else:
-                        console.print(f"Error fetching Ollama models: {response.status} - {await response.text()}", style="bold red")
+                    console.print(f"Error fetching Ollama models: {response.status} - {await response.text()}", style="bold red")
         return None
 
     async def select_anthropic_model(self) -> str:
@@ -991,7 +1114,7 @@ class ChatApp:
             return None
 
     async def select_openai_model(self) -> str:
-        models = ["gpt-4o-mini", "gpt-4o", "gpt-4o-2024-08-06"]
+        models = ["gpt-4o-mini", "gpt-4o", "gpt-4o-64k-output-alpha"]
         console.print("Available OpenAI models:", style="cyan")
         for idx, model in enumerate(models):
             console.print(f"{idx + 1}. {model}", style="green")
@@ -1020,7 +1143,10 @@ class ChatApp:
 
         if platform.system() == 'Windows':
             editor_cmd = ['notepad.exe', temp_file_path]
-        else:
+        elif platform.system() == 'Darwin':  # macOS
+            editor = os.environ.get('EDITOR', 'open -t')
+            editor_cmd = editor.split() + [temp_file_path]
+        else:  # Linux or other Unix-like systems
             editor = os.environ.get('EDITOR', 'nano')
             editor_cmd = [editor, temp_file_path]
 
@@ -1118,10 +1244,11 @@ class ChatApp:
         new_session = None
         
         if self.last_provider == 'Google':
-            if not self.ensure_api_key('google_api_key', GOOGLE_API_KEY_NAME):
-                return None
-            with SuppressLogging():
-                new_session = self.provider_factory.create_provider('Google', self.google_api_key, self.last_model, self.history_manager)
+            if self.last_provider == 'Google':
+                if not self.ensure_api_key('google_api_key', GOOGLE_API_KEY_NAME):
+                    return None
+                with SuppressLogging():
+                    new_session = self.provider_factory.create_provider('Google', self.google_api_key, self.last_model, self.history_manager)
         elif self.last_provider == 'Ollama':
             if not self.ensure_ollama_connection():
                 return None
@@ -1179,14 +1306,13 @@ class ChatApp:
         Answer:
         """
 
-        response = await self.current_session.stream_response(prompt)
-        async for chunk in response:
-            console.print(chunk, end="", style="yellow")
-        console.print()
+        response = await self.current_session.send_message(prompt)
         
         self.last_query_context = context
         self.last_query_prompt = prompt
 
+        return response
+    
     async def handle_show_context(self):
         if hasattr(self, 'last_query_context') and hasattr(self, 'last_query_prompt'):
             console.print("Last query context:", style="cyan")
@@ -1256,45 +1382,18 @@ class ChatApp:
                         if isinstance(result, ChatProvider):
                             self.current_session = result
                     elif user_input:
-                        await self.stream_and_display_response(user_input)
+                        await self.current_session.send_message(user_input)
                         self.current_session.save_history()
-
                 except KeyboardInterrupt:
                     continue
                 except EOFError:
                     break
 
         except Exception as e:
-            console.print(f"An unexpected error occurred: {str(e)}", style="bold red")
+            console.print(f"\nAn unexpected error occurred: {e}", style="bold red")
         finally:
             if self.current_session:
                 self.current_session.save_history()
-
-    async def stream_and_display_response(self, user_input):
-        with Live(console=console, refresh_per_second=4) as live:
-            complete_response = ""
-            async for chunk in self.current_session.stream_response(user_input):
-                complete_response += chunk
-                live.update(self.format_markdown(complete_response))
-            
-            self.current_session.add_to_history("assistant", complete_response)
-
-    def format_markdown(self, text):
-        parts = text.split("```")
-        formatted_parts = []
-
-        for i, part in enumerate(parts):
-            if i % 2 == 0:  # This is regular text
-                formatted_parts.append(Markdown(part))
-            else:  # This is a code block
-                lang = part.split('\n')[0].strip() or "text"
-                code = '\n'.join(part.split('\n')[1:])
-                syntax = Syntax(code, lang, theme="monokai", line_numbers=True)
-                # Add a newline before the code block for extra separation
-                formatted_parts.append("\n")
-                formatted_parts.append(Panel(syntax, border_style="none", padding=(1, 1)))
-
-        return Group(*formatted_parts)
 
     async def get_multiline_input(self) -> str:
         kb = KeyBindings()
