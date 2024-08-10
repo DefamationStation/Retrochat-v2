@@ -63,6 +63,34 @@ console = Console()
 
 tokenizer = tiktoken.get_encoding("cl100k_base")
 
+def check_and_fix_env_file():
+    required_keys = [
+        ANTHROPIC_API_KEY_NAME,
+        OPENAI_API_KEY_NAME,
+        GOOGLE_API_KEY_NAME,
+        LAST_CHAT_NAME_KEY,
+        OLLAMA_IP_KEY,
+        OLLAMA_PORT_KEY,
+        LAST_PROVIDER_KEY,
+        LAST_MODEL_KEY
+    ]
+    
+    if not os.path.exists(ENV_FILE):
+        setup_rchat()
+        return
+
+    with open(ENV_FILE, 'r') as f:
+        env_contents = f.read()
+
+    missing_keys = [key for key in required_keys if key not in env_contents]
+
+    if missing_keys:
+        console.print("Updating .env file with missing keys...", style="cyan")
+        with open(ENV_FILE, 'a') as f:
+            for key in missing_keys:
+                f.write(f"{key}=\n")
+        console.print(".env file updated.", style="green")
+
 def get_embedding_function():
     load_dotenv(ENV_FILE)
     ollama_ip = os.getenv(OLLAMA_IP_KEY, 'localhost')
@@ -95,10 +123,15 @@ def setup_rchat():
         with open(ENV_FILE, "w") as f:
             f.write(f"{ANTHROPIC_API_KEY_NAME}=\n")
             f.write(f"{OPENAI_API_KEY_NAME}=\n")
+            f.write(f"{GOOGLE_API_KEY_NAME}=\n")
             f.write(f"{LAST_CHAT_NAME_KEY}=default\n")
             f.write(f"{OLLAMA_IP_KEY}=localhost\n")
             f.write(f"{OLLAMA_PORT_KEY}=11434\n")
+            f.write(f"{LAST_PROVIDER_KEY}=\n")
+            f.write(f"{LAST_MODEL_KEY}=\n")
         console.print(f"Created .env file at {ENV_FILE}", style="cyan")
+    
+    console.print("Setup complete. You can now use the 'rchat' command from anywhere.", style="green")
     
     if sys.platform.startswith('win'):
         import winreg
@@ -528,9 +561,9 @@ class AnthropicChatSession(ChatProvider):
 
         headers = {
             "Content-Type": "application/json",
-            "X-API-Key": self.api_key,
+            "x-api-key": self.api_key,
             "anthropic-version": "2023-06-01",
-            "anthropic-beta": "max-tokens-3-5-sonnet-2024-07-15"
+            "anthropic-beta": "max-tokens-3-5-sonnet-2024-07-15",
         }
         async with aiohttp.ClientSession() as session:
             async with session.post(self.model_url, json=data, headers=headers) as response:
@@ -984,6 +1017,7 @@ class ChatApp:
         self.provider_factory = ChatProviderFactory()
         self.openai_api_key = None
         self.anthropic_api_key = None
+        self.google_api_key = None
         self.ollama_ip = None
         self.ollama_port = None
         self.current_session = None
@@ -994,6 +1028,7 @@ class ChatApp:
         self.ENV_FILE = ENV_FILE
         self.document_manager = DocumentManager()
 
+        check_and_fix_env_file()  # Add this line
         self.load_env_variables()
         self.load_last_chat()
 
@@ -1024,6 +1059,17 @@ class ChatApp:
             self.last_provider = os.getenv(LAST_PROVIDER_KEY)
             self.last_model = os.getenv(LAST_MODEL_KEY)
             self.history_manager.set_chat_name(self.chat_name)
+
+            # Debug print
+            console.print("Loaded environment variables:", style="cyan")
+            console.print(f"Anthropic API key: {'*****' if self.anthropic_api_key else 'Not set'}", style="yellow")
+            console.print(f"OpenAI API key: {'*****' if self.openai_api_key else 'Not set'}", style="yellow")
+            console.print(f"Google API key: {'*****' if self.google_api_key else 'Not set'}", style="yellow")
+            console.print(f"Chat name: {self.chat_name}", style="yellow")
+            console.print(f"Ollama IP: {self.ollama_ip}", style="yellow")
+            console.print(f"Ollama Port: {self.ollama_port}", style="yellow")
+            console.print(f"Last provider: {self.last_provider}", style="yellow")
+            console.print(f"Last model: {self.last_model}", style="yellow")
 
     def save_last_provider_and_model(self, provider: str, model: str):
         set_key(ENV_FILE, LAST_PROVIDER_KEY, provider)
