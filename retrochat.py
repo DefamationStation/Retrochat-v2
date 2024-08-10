@@ -26,6 +26,9 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
 from rich.prompt import Prompt
+from rich.syntax import Syntax
+from rich.panel import Panel
+from rich.markdown import Markdown
 from dotenv import load_dotenv, set_key
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import TextLoader, UnstructuredWordDocumentLoader, UnstructuredMarkdownLoader, PyPDFDirectoryLoader
@@ -371,9 +374,14 @@ class ChatProvider(ABC):
             console.print("Chat history loaded from previous session:", style="cyan")
             for entry in self.chat_history:
                 if entry.role == "user":
-                    console.print(entry.content, style="green")
+                    console.print(Markdown(entry.content), style="green")
                 else:
-                    console.print(entry.content, style="yellow")
+                    formatted_content = format_code_blocks(entry.content)
+                    for line in formatted_content:
+                        if isinstance(line, Panel):
+                            console.print(line)
+                        else:
+                            console.print(Markdown(line), style="yellow")
 
     def set_system_message(self, message: str):
         self.system_message = message
@@ -505,6 +513,12 @@ class OllamaChatSession(ChatProvider):
                                 break
                     console.print()
                     formatted_message = self.format_message(complete_message)
+                    formatted_content = format_code_blocks(formatted_message)
+                    for line in formatted_content:
+                        if isinstance(line, Panel):
+                            console.print(line)
+                        else:
+                            console.print(Markdown(line), style="yellow")
                     self.add_to_history("assistant", formatted_message)
                     if self.parameters.get("verbose", False):
                         tokens = self.calculate_tokens(formatted_message)
@@ -572,8 +586,13 @@ class AnthropicChatSession(ChatProvider):
                     assistant_message = response_json.get('content', [{}])[0].get('text', '')
                     if assistant_message:
                         formatted_message = self.format_message(assistant_message)
+                        formatted_content = format_code_blocks(formatted_message)
+                        for line in formatted_content:
+                            if isinstance(line, Panel):
+                                console.print(line)
+                            else:
+                                console.print(Markdown(line), style="yellow")
                         self.add_to_history("assistant", formatted_message)
-                        console.print(formatted_message, style="yellow")
                         if self.parameters.get("verbose", False):
                             tokens = self.calculate_tokens(formatted_message)
                             total_tokens = self.calculate_total_tokens()
@@ -712,6 +731,12 @@ class GoogleChatSession(ChatProvider):
                 await asyncio.sleep(0)  # Yield control to allow for responsiveness
 
         formatted_message = self.format_message(complete_message)
+        formatted_content = format_code_blocks(formatted_message)
+        for line in formatted_content:
+            if isinstance(line, Panel):
+                console.print(line)
+            else:
+                console.print(Markdown(line), style="yellow")
         self.add_to_history("assistant", formatted_message)
         
         if self.parameters.get("verbose", False):
@@ -1008,6 +1033,34 @@ class DocumentManager:
             filter={"id": {"$in": folder_docs_ids}}
         )
         return results
+
+def format_code_blocks(text):
+    lines = text.split('\n')
+    formatted_lines = []
+    in_code_block = False
+    code_block = []
+    language = ''
+
+    for line in lines:
+        if line.startswith('```'):
+            if in_code_block:
+                # End of code block
+                code = '\n'.join(code_block)
+                syntax = Syntax(code, language, theme="monokai", line_numbers=True)
+                formatted_lines.append(Panel(syntax, border_style="bold"))
+                in_code_block = False
+                code_block = []
+                language = ''
+            else:
+                # Start of code block
+                in_code_block = True
+                language = line[3:].strip() or 'text'
+        elif in_code_block:
+            code_block.append(line)
+        else:
+            formatted_lines.append(line)
+
+    return formatted_lines
 
 class ChatApp:
     def __init__(self):
