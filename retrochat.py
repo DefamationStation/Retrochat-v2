@@ -914,6 +914,7 @@ class CommandHandler:
 
     def display_help(self):
         console.print("Available commands:", style="cyan")
+        console.print("/copy <code block number> for example '/copy 0' to copy an entire code block.")
         console.print("/chat rename <new_name> - Rename the current chat", style="green")
         console.print("/chat delete - Delete the current chat", style="green")
         console.print("/chat new <chat_name> - Create a new chat", style="green")
@@ -1258,7 +1259,7 @@ class ChatApp:
             return None
 
     async def select_openai_model(self) -> str:
-        models = ["gpt-4o-mini", "gpt-4o", "gpt-4o-64k-output-alpha"]
+        models = ["gpt-4o-mini", "chatgpt-4o-latest", "gpt-4o", "gpt-4o-64k-output-alpha"]
         console.print("Available OpenAI models:", style="cyan")
         for idx, model in enumerate(models):
             console.print(f"{idx + 1}. {model}", style="green")
