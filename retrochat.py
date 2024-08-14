@@ -16,11 +16,11 @@ import tiktoken
 import warnings
 import contextlib
 import io
+import pyperclip
 from google.api_core import client_options as client_options_lib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List, Optional, Dict, Any
-from prompt_toolkit import PromptSession
+from typing import List, Optional, Dict, Any, Union
 from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.patch_stdout import patch_stdout
@@ -44,148 +44,87 @@ class SuppressLogging:
     def __exit__(self, exit_type, exit_value, exit_traceback):
         logging.disable(logging.NOTSET)
 
-USER_HOME = os.path.expanduser('~')
-RETROCHAT_DIR = os.path.join(USER_HOME, '.retrochat')
-ENV_FILE = os.path.join(RETROCHAT_DIR, '.env')
-DB_FILE = os.path.join(RETROCHAT_DIR, 'chat_history.db')
-SETTINGS_FILE = os.path.join(RETROCHAT_DIR, 'settings.json')
-ANTHROPIC_API_KEY_NAME = "ANTHROPIC_API_KEY"
-OPENAI_API_KEY_NAME = "OPENAI_API_KEY"
-GOOGLE_API_KEY_NAME = "GOOGLE_API_KEY"
-LAST_CHAT_NAME_KEY = "LAST_CHAT_NAME"
-OLLAMA_IP_KEY = "OLLAMA_IP"
-OLLAMA_PORT_KEY = "OLLAMA_PORT"
-RETROCHAT_SCRIPT = os.path.join(RETROCHAT_DIR, 'retrochat.py')
-LAST_PROVIDER_KEY = "LAST_PROVIDER"
-LAST_MODEL_KEY = "LAST_MODEL"
-CHROMA_PATH = os.path.join(RETROCHAT_DIR, "chroma")
+class Config:
+    USER_HOME = os.path.expanduser('~')
+    RETROCHAT_DIR = os.path.join(USER_HOME, '.retrochat')
+    ENV_FILE = os.path.join(RETROCHAT_DIR, '.env')
+    DB_FILE = os.path.join(RETROCHAT_DIR, 'chat_history.db')
+    SETTINGS_FILE = os.path.join(RETROCHAT_DIR, 'settings.json')
+    ANTHROPIC_API_KEY_NAME = "ANTHROPIC_API_KEY"
+    OPENAI_API_KEY_NAME = "OPENAI_API_KEY"
+    GOOGLE_API_KEY_NAME = "GOOGLE_API_KEY"
+    LAST_CHAT_NAME_KEY = "LAST_CHAT_NAME"
+    OLLAMA_IP_KEY = "OLLAMA_IP"
+    OLLAMA_PORT_KEY = "OLLAMA_PORT"
+    RETROCHAT_SCRIPT = os.path.join(RETROCHAT_DIR, 'retrochat.py')
+    LAST_PROVIDER_KEY = "LAST_PROVIDER"
+    LAST_MODEL_KEY = "LAST_MODEL"
+    CHROMA_PATH = os.path.join(RETROCHAT_DIR, "chroma")
 
-os.makedirs(RETROCHAT_DIR, exist_ok=True)
+    @classmethod
+    def initialize(cls):
+        os.makedirs(cls.RETROCHAT_DIR, exist_ok=True)
 
-console = Console()
+class Logger:
+    @staticmethod
+    def debug(message):
+        logging.debug(message)
 
-tokenizer = tiktoken.get_encoding("cl100k_base")
+    @staticmethod
+    def info(message):
+        logging.info(message)
 
-def check_and_fix_env_file():
-    required_keys = [
-        ANTHROPIC_API_KEY_NAME,
-        OPENAI_API_KEY_NAME,
-        GOOGLE_API_KEY_NAME,
-        LAST_CHAT_NAME_KEY,
-        OLLAMA_IP_KEY,
-        OLLAMA_PORT_KEY,
-        LAST_PROVIDER_KEY,
-        LAST_MODEL_KEY
-    ]
-    
-    if not os.path.exists(ENV_FILE):
-        setup_rchat()
-        return
+    @staticmethod
+    def warning(message):
+        logging.warning(message)
 
-    with open(ENV_FILE, 'r') as f:
-        env_contents = f.read()
+    @staticmethod
+    def error(message):
+        logging.error(message)
 
-    missing_keys = [key for key in required_keys if key not in env_contents]
+class ConsoleManager:
+    def __init__(self):
+        self.console = Console()
 
-    if missing_keys:
-        console.print("Updating .env file with missing keys...", style="cyan")
-        with open(ENV_FILE, 'a') as f:
-            for key in missing_keys:
-                f.write(f"{key}=\n")
-        console.print(".env file updated.", style="green")
+    def print(self, message, style="default", end="\n"):
+        self.console.print(message, style=style, end=end)
 
-def get_embedding_function():
-    load_dotenv(ENV_FILE)
-    ollama_ip = os.getenv(OLLAMA_IP_KEY, 'localhost')
-    ollama_port = os.getenv(OLLAMA_PORT_KEY, '11434')
-    return OllamaEmbeddings(
-        base_url=f"http://{ollama_ip}:{ollama_port}",
-        model="nomic-embed-text"
-    )
+    def clear(self):
+        self.console.clear()
 
-def setup_rchat():
-    os.makedirs(RETROCHAT_DIR, exist_ok=True)
-    
-    current_script = sys.argv[0]
-    shutil.copy2(current_script, RETROCHAT_SCRIPT)
-    console.print(f"Copied RetroChat script to {RETROCHAT_SCRIPT}", style="cyan")
-    
-    if sys.platform.startswith('win'):
-        rchat_bat_path = os.path.join(RETROCHAT_DIR, "rchat.bat")
-        with open(rchat_bat_path, "w") as f:
-            f.write(f'@echo off\npython "{RETROCHAT_SCRIPT}" %*')
-        console.print(f"Created rchat.bat at {rchat_bat_path}", style="cyan")
-    else:  # Mac or Linux
-        rchat_sh_path = os.path.join(RETROCHAT_DIR, "rchat")
-        with open(rchat_sh_path, "w") as f:
-            f.write(f'#!/bin/bash\npython3 "{RETROCHAT_SCRIPT}" "$@"')
-        os.chmod(rchat_sh_path, 0o755)  # Make the script executable
-        console.print(f"Created rchat shell script at {rchat_sh_path}", style="cyan")
-    
-    if not os.path.exists(ENV_FILE):
-        with open(ENV_FILE, "w") as f:
-            f.write(f"{ANTHROPIC_API_KEY_NAME}=\n")
-            f.write(f"{OPENAI_API_KEY_NAME}=\n")
-            f.write(f"{GOOGLE_API_KEY_NAME}=\n")
-            f.write(f"{LAST_CHAT_NAME_KEY}=default\n")
-            f.write(f"{OLLAMA_IP_KEY}=localhost\n")
-            f.write(f"{OLLAMA_PORT_KEY}=11434\n")
-            f.write(f"{LAST_PROVIDER_KEY}=\n")
-            f.write(f"{LAST_MODEL_KEY}=\n")
-        console.print(f"Created .env file at {ENV_FILE}", style="cyan")
-    
-    console.print("Setup complete. You can now use the 'rchat' command from anywhere.", style="green")
-    
-    if sys.platform.startswith('win'):
-        import winreg
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_ALL_ACCESS)
-        try:
-            path, _ = winreg.QueryValueEx(key, "Path")
-            if RETROCHAT_DIR not in path:
-                new_path = f"{path};{RETROCHAT_DIR}"
-                winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, new_path)
-                console.print(f"Added {RETROCHAT_DIR} to PATH.", style="cyan")
-            else:
-                console.print(f"{RETROCHAT_DIR} is already in PATH.", style="cyan")
-        except WindowsError:
-            winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, RETROCHAT_DIR)
-            console.print(f"Created PATH and added {RETROCHAT_DIR}.", style="cyan")
-        finally:
-            winreg.CloseKey(key)
-    else:  # Mac or Linux
-        shell = os.environ.get("SHELL", "").split("/")[-1]
-        rc_file = f".{shell}rc" if shell in ['bash', 'zsh'] else ".profile"
-        rc_path = os.path.join(USER_HOME, rc_file)
-        
-        with open(rc_path, "a") as f:
-            f.write(f'\nexport PATH="$PATH:{RETROCHAT_DIR}"')
-        
-        console.print(f"Added {RETROCHAT_DIR} to PATH in {rc_path}", style="cyan")
-        console.print(f"Please run 'source ~/{rc_file}' or restart your terminal for the changes to take effect.", style="cyan")
+    def ask(self, prompt, choices=None):
+        return Prompt.ask(prompt, choices=choices)
 
-    console.print("Setup complete. You can now use the 'rchat' command from anywhere.", style="green")
+console = ConsoleManager()
 
-def check_and_setup():
-    rchat_bat_path = os.path.join(RETROCHAT_DIR, "rchat.bat")
-    if not os.path.exists(rchat_bat_path) or not os.path.exists(RETROCHAT_SCRIPT):
-        console.print("RetroChat Setup", style="bold cyan")
-        console.print("This setup will do the following:", style="cyan")
-        console.print("1. Create a '.retrochat' folder in your home directory", style="cyan")
-        console.print("2. Copy the RetroChat script to the '.retrochat' folder", style="cyan")
-        console.print("3. Create an 'rchat.bat' file in the '.retrochat' folder", style="cyan")
-        console.print("4. Add the '.retrochat' folder to your system PATH", style="cyan")
-        console.print("\nThis will allow you to run RetroChat from anywhere using the 'rchat' command.", style="cyan")
-        
-        response = Prompt.ask("Do you want to proceed with the setup?", choices=["yes", "no"])
-        if response.lower() == "yes":
-            setup_rchat()
-        else:
-            console.print("Setup cancelled. You can run the setup later by using the --setup flag.", style="yellow")
+class EnvManager:
+    @staticmethod
+    def load_env_variables():
+        if os.path.exists(Config.ENV_FILE):
+            load_dotenv(Config.ENV_FILE)
+
+    @staticmethod
+    def set_env_variable(key, value):
+        set_key(Config.ENV_FILE, key, value)
+
+    @staticmethod
+    def get_env_variable(key, default=None):
+        return os.getenv(key, default)
+
+class TokenizerManager:
+    def __init__(self):
+        self.tokenizer = tiktoken.get_encoding("cl100k_base")
+
+    def calculate_tokens(self, text: str) -> int:
+        return len(self.tokenizer.encode(text))
 
 @dataclass
 class ChatMessage:
     role: str
     content: str
+
+    def __post_init__(self):
+        self.content = str(self.content)
 
     def to_dict(self) -> dict:
         return {
@@ -239,9 +178,9 @@ class ChatHistoryManager:
                     self.conn.execute('ALTER TABLE chat_sessions ADD COLUMN system_message TEXT')
                 if 'parameters' not in columns:
                     self.conn.execute('ALTER TABLE chat_sessions ADD COLUMN parameters TEXT')
-                logging.info("Database schema updated successfully.")
+                Logger.info("Database schema updated successfully.")
         except Exception as e:
-            logging.error(f"Error updating database schema: {e}")
+            Logger.error(f"Error updating database schema: {e}")
 
     def _get_session_id(self, chat_name: str) -> int:
         cursor = self.conn.cursor()
@@ -262,18 +201,18 @@ class ChatHistoryManager:
                 self.conn.execute('DELETE FROM chat_messages WHERE session_id = ?', (session_id,))
                 self.conn.executemany('''
                     INSERT INTO chat_messages (session_id, role, content) VALUES (?, ?, ?)
-                ''', [(session_id, msg.role, msg.content) for msg in history])
+                ''', [(session_id, msg.role, str(msg.content)) for msg in history])
         except Exception as e:
-            logging.error(f"Error saving chat history: {e}")
+            Logger.error(f"Error saving chat history: {e}")
 
     def load_history(self) -> List[ChatMessage]:
         session_id = self._get_session_id(self.chat_name)
         cursor = self.conn.cursor()
         cursor.execute('SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY timestamp', (session_id,))
         try:
-            return [ChatMessage(role=row[0], content=row[1]) for row in cursor.fetchall()]
+            return [ChatMessage(role=row[0], content=str(row[1])) for row in cursor.fetchall()]
         except Exception as e:
-            logging.error(f"Error loading chat history: {e}")
+            Logger.error(f"Error loading chat history: {e}")
             return []
 
     def save_system_message(self, system_message: str):
@@ -340,12 +279,13 @@ class ChatProvider(ABC):
             "frequency_penalty": 1.1,
             "repeat_penalty": 1.1,
         }
+        self.tokenizer_manager = TokenizerManager()
 
     def load_history(self) -> List[ChatMessage]:
         try:
             return self.history_manager.load_history()
         except Exception as e:
-            logging.error(f"Error loading chat history: {e}")
+            Logger.error(f"Error loading chat history: {e}")
             return []
 
     @abstractmethod
@@ -356,7 +296,7 @@ class ChatProvider(ABC):
         self.chat_history.append(ChatMessage(role, content))
         self.save_history()
         if self.parameters.get("verbose", False) and role == "user":
-            tokens = self.calculate_tokens(content)
+            tokens = self.tokenizer_manager.calculate_tokens(content)
             total_tokens = self.calculate_total_tokens()
             console.print(f"Message tokens: {tokens}", style="cyan")
             console.print(f"Total conversation tokens: {total_tokens}", style="cyan")
@@ -365,7 +305,7 @@ class ChatProvider(ABC):
         try:
             self.history_manager.save_history(self.chat_history)
         except Exception as e:
-            logging.error(f"Error saving chat history: {e}")
+            Logger.error(f"Error saving chat history: {e}")
 
     def display_history(self):
         if not self.chat_history:
@@ -376,12 +316,8 @@ class ChatProvider(ABC):
                 if entry.role == "user":
                     console.print(Markdown(entry.content), style="green")
                 else:
-                    formatted_content = format_code_blocks(entry.content)
-                    for line in formatted_content:
-                        if isinstance(line, Panel):
-                            console.print(line)
-                        else:
-                            console.print(Markdown(line), style="yellow")
+                    formatted_content = self.format_message(entry.content)
+                    console.print(Markdown(formatted_content), style="yellow")
 
     def set_system_message(self, message: str):
         self.system_message = message
@@ -395,6 +331,8 @@ class ChatProvider(ABC):
         return formatted_message
 
     def set_parameter(self, param: str, value: Any):
+        if isinstance(value, int) and param not in ["num_predict", "top_k", "repeat_last_n", "num_ctx", "candidate_count", "max_tokens"]:
+            value = str(value)
         if param in self.default_parameters or param in ["repeat_penalty", "frequency_penalty"]:
             if param in ["num_predict", "top_k", "repeat_last_n", "num_ctx", "candidate_count", "max_tokens"]:
                 value = int(value)
@@ -436,7 +374,7 @@ class ChatProvider(ABC):
             console.print(f"system: {self.system_message}", style="green")
 
     def calculate_tokens(self, text: str) -> int:
-        return len(tokenizer.encode(text))
+        return self.tokenizer_manager.calculate_tokens(text)
 
     def calculate_total_tokens(self) -> int:
         total_tokens = 0
@@ -508,49 +446,24 @@ class OllamaChatSession(ChatProvider):
                             response_json = json.loads(line)
                             message_content = response_json.get('message', {}).get('content', '')
                             complete_message += message_content
-                            console.print(message_content, end="", style="yellow")
+                            yield message_content  # Yield each chunk for streaming
                             if response_json.get('done', False):
                                 break
-                    console.print()
+                    
                     formatted_message = self.format_message(complete_message)
-                    formatted_content = format_code_blocks(formatted_message)
-                    for line in formatted_content:
-                        if isinstance(line, Panel):
-                            console.print(line)
-                        else:
-                            console.print(Markdown(line), style="yellow")
                     self.add_to_history("assistant", formatted_message)
+                    
                     if self.parameters.get("verbose", False):
                         tokens = self.calculate_tokens(formatted_message)
                         total_tokens = self.calculate_total_tokens()
                         console.print(f"Response tokens: {tokens}", style="cyan")
                         console.print(f"Total conversation tokens: {total_tokens}", style="cyan")
-                    return formatted_message
-                else:
-                    console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
-                    return None
 
-    def set_parameter(self, param: str, value: Any):
-        if param in self.default_parameters or param == "repeat_penalty":
-            if param in ["num_predict", "top_k", "repeat_last_n", "num_ctx"]:
-                value = int(value)
-            elif param in ["top_p", "temperature", "repeat_penalty", "frequency_penalty"]:
-                value = float(value)
-            elif param == "stop":
-                value = value.split() if isinstance(value, str) else value
-            elif param == "verbose":
-                value = str(value).lower() == "true"
-            
-            if param == "repeat_penalty" and isinstance(self, OpenAIChatSession):
-                param = "frequency_penalty"
-            
-            self.parameters[param] = value
-            self.history_manager.save_parameters(self.parameters)
-            
-            if param != "verbose" or value:
-                console.print(f"Parameter '{param}' set to {value}", style="cyan")
-        else:
-            console.print(f"Invalid parameter: {param}", style="bold red")
+                    yield formatted_message
+                else:
+                    error_message = f"Error: {response.status} - {await response.text()}"
+                    console.print(error_message, style="bold red")
+                    yield error_message
 
 class AnthropicChatSession(ChatProvider):
     def __init__(self, api_key: str, model_url: str, history_manager: ChatHistoryManager, model: str):
@@ -563,11 +476,18 @@ class AnthropicChatSession(ChatProvider):
         self.add_to_history("user", message)
         messages = self.prepare_messages()
         
+        if not messages:
+            error_message = "Error: No valid messages to send to the API."
+            console.print(error_message, style="bold red")
+            yield error_message
+            return
+
         data = {
             "model": self.model,
             "max_tokens": self.parameters.get("max_tokens", 8192),
             "temperature": self.parameters.get("temperature", 0.8),
-            "messages": messages
+            "messages": messages,
+            "stream": False
         }
 
         if self.system_message:
@@ -579,6 +499,7 @@ class AnthropicChatSession(ChatProvider):
             "anthropic-version": "2023-06-01",
             "anthropic-beta": "max-tokens-3-5-sonnet-2024-07-15",
         }
+
         async with aiohttp.ClientSession() as session:
             async with session.post(self.model_url, json=data, headers=headers) as response:
                 if response.status == 200:
@@ -586,33 +507,38 @@ class AnthropicChatSession(ChatProvider):
                     assistant_message = response_json.get('content', [{}])[0].get('text', '')
                     if assistant_message:
                         formatted_message = self.format_message(assistant_message)
-                        formatted_content = format_code_blocks(formatted_message)
-                        for line in formatted_content:
-                            if isinstance(line, Panel):
-                                console.print(line)
-                            else:
-                                console.print(Markdown(line), style="yellow")
                         self.add_to_history("assistant", formatted_message)
                         if self.parameters.get("verbose", False):
                             tokens = self.calculate_tokens(formatted_message)
                             total_tokens = self.calculate_total_tokens()
                             console.print(f"Response tokens: {tokens}", style="cyan")
                             console.print(f"Total conversation tokens: {total_tokens}", style="cyan")
-                        return formatted_message
+                        yield formatted_message
                     else:
-                        console.print("No response content received.", style="bold red")
+                        error_message = "No response content received."
+                        console.print(error_message, style="bold red")
+                        yield error_message
                 else:
-                    console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
-                return None
+                    error_message = f"Error: {response.status} - {await response.text()}"
+                    console.print(error_message, style="bold red")
+                    yield error_message
 
     def prepare_messages(self):
         messages = []
+        last_role = None
         for msg in self.chat_history:
-            if msg.role != "system":
-                if not messages or messages[-1]["role"] != msg.role:
-                    messages.append({"role": msg.role, "content": msg.content})
+            if msg.role != "system" and msg.content.strip():
+                if msg.role == last_role:
+                    # If we have consecutive messages with the same role, combine them
+                    messages[-1]["content"] += "\n\n" + msg.content.strip()
                 else:
-                    messages[-1]["content"] += "\n" + msg.content
+                    messages.append({"role": msg.role, "content": msg.content.strip()})
+                    last_role = msg.role
+        
+        # Ensure the last message is from the user
+        if messages and messages[-1]["role"] != "user":
+            messages.pop()
+        
         return messages
 
 class OpenAIChatSession(ChatProvider):
@@ -661,10 +587,9 @@ class OpenAIChatSession(ChatProvider):
                                     content = response_json['choices'][0]['delta'].get('content', '')
                                     if content:
                                         complete_message += content
-                                        console.print(content, end="", style="yellow")
+                                        yield content
                                 except json.JSONDecodeError:
                                     continue
-                    console.print()
                     formatted_message = self.format_message(complete_message)
                     self.add_to_history("assistant", formatted_message)
                     if self.parameters.get("verbose", False):
@@ -672,11 +597,13 @@ class OpenAIChatSession(ChatProvider):
                         total_tokens = self.calculate_total_tokens()
                         console.print(f"Response tokens: {tokens}", style="cyan")
                         console.print(f"Total conversation tokens: {total_tokens}", style="cyan")
-                    return formatted_message
+                    yield None  # Signal end of streaming
+                    yield formatted_message  # Yield the formatted message as the last item
                 else:
-                    console.print(f"Error: {response.status} - {await response.text()}", style="bold red")
-                    return None
-                
+                    error_message = f"Error: {response.status} - {await response.text()}"
+                    console.print(error_message, style="bold red")
+                    yield error_message
+
 class GoogleChatSession(ChatProvider):
     def __init__(self, api_key: str, model: str, history_manager: ChatHistoryManager):
         super().__init__(history_manager)
@@ -715,37 +642,37 @@ class GoogleChatSession(ChatProvider):
             temperature=self.parameters.get("temperature", 0.8),
         )
 
-        with SuppressLogging():
-            response = await asyncio.to_thread(
-                self.chat.send_message,
-                message,
-                generation_config=generation_config,
-                stream=True
-            )
+        try:
+            with SuppressLogging():
+                response = await asyncio.to_thread(
+                    self.chat.send_message,
+                    message,
+                    generation_config=generation_config,
+                    stream=False  # Changed to False as the API doesn't support streaming
+                )
 
-            complete_message = ""
-            for chunk in response:
-                chunk_text = chunk.text
-                complete_message += chunk_text
-                console.print(chunk_text, end="", style="yellow")
-                await asyncio.sleep(0)  # Yield control to allow for responsiveness
+            complete_message = response.text
+            formatted_message = self.format_message(complete_message)
+            self.add_to_history("assistant", formatted_message)
+            
+            if self.parameters.get("verbose", False):
+                tokens = self.calculate_tokens(formatted_message)
+                total_tokens = self.calculate_total_tokens()
+                console.print(f"Response tokens: {tokens}", style="cyan")
+                console.print(f"Total conversation tokens: {total_tokens}", style="cyan")
+            
+            yield formatted_message  # Yield the formatted message
+        except Exception as e:
+            error_message = f"Error in Google API: {str(e)}"
+            console.print(error_message, style="bold red")
+            yield error_message
 
-        formatted_message = self.format_message(complete_message)
-        formatted_content = format_code_blocks(formatted_message)
-        for line in formatted_content:
-            if isinstance(line, Panel):
-                console.print(line)
-            else:
-                console.print(Markdown(line), style="yellow")
-        self.add_to_history("assistant", formatted_message)
-        
-        if self.parameters.get("verbose", False):
-            tokens = self.calculate_tokens(formatted_message)
-            total_tokens = self.calculate_total_tokens()
-            console.print(f"Response tokens: {tokens}", style="cyan")
-            console.print(f"Total conversation tokens: {total_tokens}", style="cyan")
-        
-        return formatted_message
+    async def _async_iterator(self, sync_iterator):
+        while True:
+            try:
+                yield await asyncio.to_thread(next, sync_iterator)
+            except StopIteration:
+                break
 
     def set_system_message(self, message: str):
         super().set_system_message(message)
@@ -779,6 +706,88 @@ class GoogleChatSession(ChatProvider):
         
         if self.system_message:
             console.print(f"system: {self.system_message}", style="green")
+
+class OllamaChatSession(ChatProvider):
+    def __init__(self, model_url: str, model: str, history_manager: ChatHistoryManager):
+        super().__init__(history_manager)
+        self.model_url = model_url
+        self.model = model
+        self.default_parameters.update({
+            "num_predict": 128,
+            "top_k": 40,
+            "top_p": 0.95,
+            "repeat_penalty": 1.1,
+            "repeat_last_n": 64,
+            "num_ctx": 8192,
+            "stop": None,
+        })
+    
+    def set_parameter(self, param: str, value: Any):
+        if param in self.default_parameters or param in ["repeat_penalty", "frequency_penalty"]:
+            if param in ["num_predict", "top_k", "repeat_last_n", "num_ctx"]:
+                value = int(value)
+            elif param in ["top_p", "temperature", "repeat_penalty", "frequency_penalty"]:
+                value = float(value)
+            elif param == "stop":
+                value = value.split() if isinstance(value, str) else value
+            elif param == "verbose":
+                value = str(value).lower() == "true"
+            
+            if param in ["repeat_penalty", "frequency_penalty"]:
+                self.parameters["repeat_penalty"] = value
+                self.parameters["frequency_penalty"] = value
+            else:
+                self.parameters[param] = value
+            
+            self.history_manager.save_parameters(self.parameters)
+            
+            if param != "verbose" or value:
+                console.print(f"Parameter '{param}' set to {value}", style="cyan")
+        else:
+            console.print(f"Invalid parameter: {param}", style="bold red")
+
+    async def send_message(self, message: str):
+        self.add_to_history("user", message)
+        messages = [{"role": msg.role, "content": msg.content} for msg in self.chat_history]
+        
+        if self.system_message:
+            messages.insert(0, {"role": "system", "content": self.system_message})
+        
+        data = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True,
+            "options": {k: v for k, v in self.parameters.items() if v is not None}
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(self.model_url, json=data) as response:
+                if response.status == 200:
+                    complete_message = ""
+                    async for line in response.content:
+                        if line:
+                            response_json = json.loads(line)
+                            message_content = response_json.get('message', {}).get('content', '')
+                            complete_message += message_content
+                            yield message_content  # Yield each chunk for streaming
+                            if response_json.get('done', False):
+                                break
+                    
+                    formatted_message = self.format_message(complete_message)
+                    self.add_to_history("assistant", formatted_message)
+                    
+                    if self.parameters.get("verbose", False):
+                        tokens = self.calculate_tokens(formatted_message)
+                        total_tokens = self.calculate_total_tokens()
+                        console.print(f"Response tokens: {tokens}", style="cyan")
+                        console.print(f"Total conversation tokens: {total_tokens}", style="cyan")
+                    
+                    yield None  # Signal end of streaming
+                    yield formatted_message  # Yield the formatted message as the last item
+                else:
+                    error_message = f"Error: {response.status} - {await response.text()}"
+                    console.print(error_message, style="bold red")
+                    yield error_message
 
 class ChatProviderFactory:
     @staticmethod
@@ -923,11 +932,11 @@ class CommandHandler:
 
 class DocumentManager:
     def __init__(self):
-        self.chroma_path = CHROMA_PATH
+        self.chroma_path = Config.CHROMA_PATH
         self.embedding_function = get_embedding_function()
 
     def load_documents(self, folder_name: str) -> bool:
-        data_path = os.path.join(RETROCHAT_DIR, folder_name)
+        data_path = os.path.join(Config.RETROCHAT_DIR, folder_name)
         console.print(f"Attempting to load documents from: {data_path}", style="cyan")
         
         if not os.path.exists(data_path):
@@ -997,22 +1006,26 @@ class DocumentManager:
             console.print("[OK] No new documents to add", style="green")
 
     def calculate_chunk_ids(self, chunks: List[Document], folder_name: str):
-        last_page_id = None
-        current_chunk_index = 0
-
+        chunk_counter = {}
+        
         for chunk in chunks:
-            source = chunk.metadata.get("source")
-            page = chunk.metadata.get("page")
-            current_page_id = f"{folder_name}/{source}:{page}"
-
-            if current_page_id == last_page_id:
-                current_chunk_index += 1
-            else:
-                current_chunk_index = 0
-
-            chunk_id = f"{current_page_id}:{current_chunk_index}"
-            last_page_id = current_page_id
-
+            source = chunk.metadata.get("source", "unknown")
+            page = chunk.metadata.get("page", "unknown")
+            
+            # Create a base ID
+            base_id = f"{folder_name}/{source}:{page}"
+            
+            # If this base_id hasn't been seen before, initialize its counter
+            if base_id not in chunk_counter:
+                chunk_counter[base_id] = 0
+            
+            # Increment the counter for this base_id
+            chunk_counter[base_id] += 1
+            
+            # Create a unique ID by appending the counter
+            chunk_id = f"{base_id}:{chunk_counter[base_id] - 1}"
+            
+            # Store the unique ID in the chunk's metadata
             chunk.metadata["id"] = chunk_id
 
         return chunks
@@ -1034,12 +1047,25 @@ class DocumentManager:
         )
         return results
 
+def get_embedding_function():
+    EnvManager.load_env_variables()
+    ollama_ip = EnvManager.get_env_variable(Config.OLLAMA_IP_KEY, 'localhost')
+    ollama_port = EnvManager.get_env_variable(Config.OLLAMA_PORT_KEY, '11434')
+    return OllamaEmbeddings(
+        base_url=f"http://{ollama_ip}:{ollama_port}",
+        model="nomic-embed-text"
+    )
+
 def format_code_blocks(text):
+    if not isinstance(text, str):
+        text = str(text)
     lines = text.split('\n')
     formatted_lines = []
+    code_blocks = []
     in_code_block = False
     code_block = []
     language = ''
+    block_count = 0
 
     for line in lines:
         if line.startswith('```'):
@@ -1047,10 +1073,14 @@ def format_code_blocks(text):
                 # End of code block
                 code = '\n'.join(code_block)
                 syntax = Syntax(code, language, theme="monokai", line_numbers=True)
-                formatted_lines.append(Panel(syntax, border_style="bold"))
+                panel = Panel(syntax, border_style="bold", expand=False)
+                formatted_lines.append(panel)
+                formatted_lines.append(f'Code Block {block_count}')
+                code_blocks.append(code)
                 in_code_block = False
                 code_block = []
                 language = ''
+                block_count += 1
             else:
                 # Start of code block
                 in_code_block = True
@@ -1060,73 +1090,86 @@ def format_code_blocks(text):
         else:
             formatted_lines.append(line)
 
-    return formatted_lines
+    return formatted_lines, code_blocks
+
+def copy_code_to_clipboard(code):
+    try:
+        if isinstance(code, list):
+            code = '\n'.join(code)  # Join list elements into a single string
+        pyperclip.copy(code)
+        console.print("Code copied to clipboard!", style="green")
+    except Exception as e:
+        console.print(f"Failed to copy code to clipboard: {e}", style="bold red")
 
 class ChatApp:
     def __init__(self):
         self.chat_name = 'default'
-        self.history_manager = ChatHistoryManager(DB_FILE)
+        self.history_manager = ChatHistoryManager(Config.DB_FILE)
         self.command_handler = CommandHandler(self.history_manager, self)
         self.provider_factory = ChatProviderFactory()
-        self.openai_api_key = None
-        self.anthropic_api_key = None
-        self.google_api_key = None
-        self.ollama_ip = None
-        self.ollama_port = None
         self.current_session = None
         self.last_commit_hash = None
         self.updated = False
         self.last_provider = None
         self.last_model = None
-        self.ENV_FILE = ENV_FILE
         self.document_manager = DocumentManager()
+        self.code_blocks = []
 
-        check_and_fix_env_file()  # Add this line
+        self.check_and_fix_env_file()
         self.load_env_variables()
         self.load_last_chat()
 
-    def display_non_default_parameters(self):
-        non_default_params = {}
-        for param, value in self.current_session.parameters.items():
-            if param in self.current_session.default_parameters:
-                if value != self.current_session.default_parameters[param]:
-                    non_default_params[param] = value
-            else:
-                non_default_params[param] = value
+    def check_and_fix_env_file(self):
+        required_keys = [
+            Config.ANTHROPIC_API_KEY_NAME,
+            Config.OPENAI_API_KEY_NAME,
+            Config.GOOGLE_API_KEY_NAME,
+            Config.LAST_CHAT_NAME_KEY,
+            Config.OLLAMA_IP_KEY,
+            Config.OLLAMA_PORT_KEY,
+            Config.LAST_PROVIDER_KEY,
+            Config.LAST_MODEL_KEY
+        ]
         
-        if non_default_params:
-            for param, value in non_default_params.items():
-                console.print(f"{param}: {value}", style="green")
+        if not os.path.exists(Config.ENV_FILE):
+            self.setup_rchat()
+            return
+
+        with open(Config.ENV_FILE, 'r') as f:
+            env_contents = f.read()
+
+        missing_keys = [key for key in required_keys if key not in env_contents]
+
+        if missing_keys:
+            console.print("Updating .env file with missing keys...", style="cyan")
+            with open(Config.ENV_FILE, 'a') as f:
+                for key in missing_keys:
+                    f.write(f"{key}=\n")
+            console.print(".env file updated.", style="green")
 
     def load_env_variables(self):
-        if os.path.exists(ENV_FILE):
-            load_dotenv(ENV_FILE)
-            self.openai_api_key = os.getenv(OPENAI_API_KEY_NAME)
-            self.anthropic_api_key = os.getenv(ANTHROPIC_API_KEY_NAME)
-            self.google_api_key = os.getenv(GOOGLE_API_KEY_NAME)
-            self.chat_name = os.getenv(LAST_CHAT_NAME_KEY, 'default')
-            self.ollama_ip = os.getenv(OLLAMA_IP_KEY, 'localhost')
-            self.ollama_port = os.getenv(OLLAMA_PORT_KEY, '11434')
-            self.last_commit_hash = os.getenv("LAST_COMMIT_HASH")
-            self.updated = os.getenv("UPDATED", "false").lower() == "true"
-            self.last_provider = os.getenv(LAST_PROVIDER_KEY)
-            self.last_model = os.getenv(LAST_MODEL_KEY)
-            self.history_manager.set_chat_name(self.chat_name)
+        EnvManager.load_env_variables()
+        self.chat_name = EnvManager.get_env_variable(Config.LAST_CHAT_NAME_KEY, 'default')
+        self.last_commit_hash = EnvManager.get_env_variable("LAST_COMMIT_HASH")
+        self.updated = EnvManager.get_env_variable("UPDATED", "false").lower() == "true"
+        self.last_provider = EnvManager.get_env_variable(Config.LAST_PROVIDER_KEY)
+        self.last_model = EnvManager.get_env_variable(Config.LAST_MODEL_KEY)
+        self.history_manager.set_chat_name(self.chat_name)
 
-            # Debug print
-            console.print("Loaded environment variables:", style="cyan")
-            console.print(f"Anthropic API key: {'*****' if self.anthropic_api_key else 'Not set'}", style="yellow")
-            console.print(f"OpenAI API key: {'*****' if self.openai_api_key else 'Not set'}", style="yellow")
-            console.print(f"Google API key: {'*****' if self.google_api_key else 'Not set'}", style="yellow")
-            console.print(f"Chat name: {self.chat_name}", style="yellow")
-            console.print(f"Ollama IP: {self.ollama_ip}", style="yellow")
-            console.print(f"Ollama Port: {self.ollama_port}", style="yellow")
-            console.print(f"Last provider: {self.last_provider}", style="yellow")
-            console.print(f"Last model: {self.last_model}", style="yellow")
+        # Debug print
+        #console.print("Loaded environment variables:", style="cyan")
+        #console.print(f"Anthropic API key: {'*****' if EnvManager.get_env_variable(Config.ANTHROPIC_API_KEY_NAME) else 'Not set'}", style="yellow")
+        #console.print(f"OpenAI API key: {'*****' if EnvManager.get_env_variable(Config.OPENAI_API_KEY_NAME) else 'Not set'}", style="yellow")
+        #console.print(f"Google API key: {'*****' if EnvManager.get_env_variable(Config.GOOGLE_API_KEY_NAME) else 'Not set'}", style="yellow")
+        #console.print(f"Chat name: {self.chat_name}", style="yellow")
+        #console.print(f"Ollama IP: {EnvManager.get_env_variable(Config.OLLAMA_IP_KEY)}", style="yellow")
+        #console.print(f"Ollama Port: {EnvManager.get_env_variable(Config.OLLAMA_PORT_KEY)}", style="yellow")
+        #console.print(f"Last provider: {self.last_provider}", style="yellow")
+        #console.print(f"Last model: {self.last_model}", style="yellow")
 
     def save_last_provider_and_model(self, provider: str, model: str):
-        set_key(ENV_FILE, LAST_PROVIDER_KEY, provider)
-        set_key(ENV_FILE, LAST_MODEL_KEY, model)
+        EnvManager.set_env_variable(Config.LAST_PROVIDER_KEY, provider)
+        EnvManager.set_env_variable(Config.LAST_MODEL_KEY, model)
         self.last_provider = provider
         self.last_model = model
 
@@ -1142,17 +1185,16 @@ class ChatApp:
             missed_commits = get_missed_commits("DefamationStation", "Retrochat-v2", "retrochat.py", self.last_commit_hash)
             for i, commit_message in enumerate(missed_commits, 1):
                 console.print(f"{i}. {commit_message}", style="yellow")
-            set_key(self.ENV_FILE, "UPDATED", "false")
+            EnvManager.set_env_variable("UPDATED", "false")
             self.updated = False
 
     def ensure_api_key(self, key_name: str, env_var: str):
-        if not getattr(self, key_name):
+        api_key = EnvManager.get_env_variable(env_var)
+        if not api_key:
             console.print(f"{env_var} is not set. Please enter your API key.", style="cyan")
-            api_key = Prompt.ask(f"Enter your {env_var}")
+            api_key = console.ask(f"Enter your {env_var}")
             if api_key:
-                set_key(ENV_FILE, env_var, api_key)
-                load_dotenv(ENV_FILE)
-                setattr(self, key_name, api_key)
+                EnvManager.set_env_variable(env_var, api_key)
                 console.print(f"{env_var} has been set and saved in the .env file.", style="cyan")
                 return True
             else:
@@ -1161,28 +1203,31 @@ class ChatApp:
         return True
 
     def ensure_ollama_connection(self):
-        url = f"http://{self.ollama_ip}:{self.ollama_port}/api/tags"
+        ollama_ip = EnvManager.get_env_variable(Config.OLLAMA_IP_KEY, 'localhost')
+        ollama_port = EnvManager.get_env_variable(Config.OLLAMA_PORT_KEY, '11434')
+        url = f"http://{ollama_ip}:{ollama_port}/api/tags"
         try:
             response = requests.get(url, timeout=5)
             response.raise_for_status()
             return True
         except requests.RequestException:
-            console.print(f"Unable to connect to Ollama at {self.ollama_ip}:{self.ollama_port}", style="bold red")
-            new_ip = Prompt.ask("Enter Ollama IP (press Enter for localhost)")
-            new_port = Prompt.ask("Enter Ollama port (press Enter for 11434)")
+            console.print(f"Unable to connect to Ollama at {ollama_ip}:{ollama_port}", style="bold red")
+            new_ip = console.ask("Enter Ollama IP (press Enter for localhost)")
+            new_port = console.ask("Enter Ollama port (press Enter for 11434)")
             
-            self.ollama_ip = new_ip or 'localhost'
-            self.ollama_port = new_port or '11434'
+            ollama_ip = new_ip or 'localhost'
+            ollama_port = new_port or '11434'
             
-            set_key(ENV_FILE, OLLAMA_IP_KEY, self.ollama_ip)
-            set_key(ENV_FILE, OLLAMA_PORT_KEY, self.ollama_port)
-            load_dotenv(ENV_FILE)
+            EnvManager.set_env_variable(Config.OLLAMA_IP_KEY, ollama_ip)
+            EnvManager.set_env_variable(Config.OLLAMA_PORT_KEY, ollama_port)
             
             console.print(f"Ollama connection details updated and saved in the .env file.", style="cyan")
             return self.ensure_ollama_connection()
 
     async def select_ollama_model(self) -> str:
-        url = f"http://{self.ollama_ip}:{self.ollama_port}/api/tags"
+        ollama_ip = EnvManager.get_env_variable(Config.OLLAMA_IP_KEY, 'localhost')
+        ollama_port = EnvManager.get_env_variable(Config.OLLAMA_PORT_KEY, '11434')
+        url = f"http://{ollama_ip}:{ollama_port}/api/tags"
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as response:
                 if response.status == 200:
@@ -1192,7 +1237,7 @@ class ChatApp:
                         console.print("Available Ollama models:", style="cyan")
                         for idx, model in enumerate(model_names):
                             console.print(f"{idx + 1}. {model}", style="green")
-                        choice = Prompt.ask("Select a model")
+                        choice = console.ask("Select a model")
                         return model_names[int(choice) - 1]
                     else:
                         console.print("Unexpected API response structure.", style="bold red")
@@ -1205,7 +1250,7 @@ class ChatApp:
         console.print("Available Anthropic models:", style="cyan")
         for idx, model in enumerate(models):
             console.print(f"{idx + 1}. {model}", style="green")
-        choice = Prompt.ask("Select a model number")
+        choice = console.ask("Select a model number")
         try:
             return models[int(choice) - 1]
         except (ValueError, IndexError):
@@ -1217,7 +1262,7 @@ class ChatApp:
         console.print("Available OpenAI models:", style="cyan")
         for idx, model in enumerate(models):
             console.print(f"{idx + 1}. {model}", style="green")
-        choice = Prompt.ask("Select a model number")
+        choice = console.ask("Select a model number")
         return models[int(choice) - 1]
     
     async def select_google_model(self) -> str:
@@ -1225,11 +1270,11 @@ class ChatApp:
         console.print("Available Google Gemini models:", style="cyan")
         for idx, model in enumerate(models):
             console.print(f"{idx + 1}. {model}", style="green")
-        choice = Prompt.ask("Select a model number")
+        choice = console.ask("Select a model number")
         return models[int(choice) - 1]
 
     def save_last_chat_name(self, chat_name: str):
-        set_key(ENV_FILE, LAST_CHAT_NAME_KEY, chat_name)
+        EnvManager.set_env_variable(Config.LAST_CHAT_NAME_KEY, chat_name)
 
     async def edit_conversation(self, session: ChatProvider):
         chat_text = ""
@@ -1291,7 +1336,7 @@ class ChatApp:
 
     async def switch_provider(self):
         console.print("Select provider:\n1. Ollama\n2. Anthropic\n3. OpenAI\n4. Google", style="cyan")
-        mode = Prompt.ask("Enter your choice")
+        mode = console.ask("Enter your choice")
 
         if mode == '1':
             if not self.ensure_ollama_connection():
@@ -1299,35 +1344,37 @@ class ChatApp:
             selected_model = await self.select_ollama_model()
             if not selected_model:
                 return None
-            model_url = f"http://{self.ollama_ip}:{self.ollama_port}/api/chat"
+            ollama_ip = EnvManager.get_env_variable(Config.OLLAMA_IP_KEY, 'localhost')
+            ollama_port = EnvManager.get_env_variable(Config.OLLAMA_PORT_KEY, '11434')
+            model_url = f"http://{ollama_ip}:{ollama_port}/api/chat"
             new_session = self.provider_factory.create_provider('Ollama', model_url, selected_model, self.history_manager)
             provider = 'Ollama'
         elif mode == '2':
-            if not self.ensure_api_key('anthropic_api_key', ANTHROPIC_API_KEY_NAME):
+            if not self.ensure_api_key('anthropic_api_key', Config.ANTHROPIC_API_KEY_NAME):
                 return None
             selected_model = await self.select_anthropic_model()
             if not selected_model:
                 return None
-            new_session = self.provider_factory.create_provider('Anthropic', self.anthropic_api_key,
+            new_session = self.provider_factory.create_provider('Anthropic', EnvManager.get_env_variable(Config.ANTHROPIC_API_KEY_NAME),
     "https://api.anthropic.com/v1/messages", self.history_manager, selected_model)
             provider = 'Anthropic'
         elif mode == '3':
-            if not self.ensure_api_key('openai_api_key', OPENAI_API_KEY_NAME):
+            if not self.ensure_api_key('openai_api_key', Config.OPENAI_API_KEY_NAME):
                 return None
             selected_model = await self.select_openai_model()
             if not selected_model:
                 return None
-            new_session = self.provider_factory.create_provider('OpenAI', self.openai_api_key,
+            new_session = self.provider_factory.create_provider('OpenAI', EnvManager.get_env_variable(Config.OPENAI_API_KEY_NAME),
     "https://api.openai.com/v1/chat/completions", selected_model, self.history_manager)
             provider = 'OpenAI'
         elif mode == '4':
-            if not self.ensure_api_key('google_api_key', GOOGLE_API_KEY_NAME):
+            if not self.ensure_api_key('google_api_key', Config.GOOGLE_API_KEY_NAME):
                 return None
             selected_model = await self.select_google_model()
             if not selected_model:
                 return None
             with SuppressLogging():
-                new_session = self.provider_factory.create_provider('Google', self.google_api_key, selected_model, self.history_manager)
+                new_session = self.provider_factory.create_provider('Google', EnvManager.get_env_variable(Config.GOOGLE_API_KEY_NAME), selected_model, self.history_manager)
             provider = 'Google'
         else:
             console.print("Invalid choice. Please select 1, 2, 3, or 4.", style="bold red")
@@ -1343,27 +1390,28 @@ class ChatApp:
         new_session = None
         
         if self.last_provider == 'Google':
-            if self.last_provider == 'Google':
-                if not self.ensure_api_key('google_api_key', GOOGLE_API_KEY_NAME):
-                    return None
-                with SuppressLogging():
-                    new_session = self.provider_factory.create_provider('Google', self.google_api_key, self.last_model, self.history_manager)
+            if not self.ensure_api_key('google_api_key', Config.GOOGLE_API_KEY_NAME):
+                return None
+            with SuppressLogging():
+                new_session = self.provider_factory.create_provider('Google', EnvManager.get_env_variable(Config.GOOGLE_API_KEY_NAME), self.last_model, self.history_manager)
         elif self.last_provider == 'Ollama':
             if not self.ensure_ollama_connection():
                 return None
-            model_url = f"http://{self.ollama_ip}:{self.ollama_port}/api/chat"
+            ollama_ip = EnvManager.get_env_variable(Config.OLLAMA_IP_KEY, 'localhost')
+            ollama_port = EnvManager.get_env_variable(Config.OLLAMA_PORT_KEY, '11434')
+            model_url = f"http://{ollama_ip}:{ollama_port}/api/chat"
             with contextlib.redirect_stderr(io.StringIO()):
                 new_session = self.provider_factory.create_provider('Ollama', model_url, self.last_model, self.history_manager)
         elif self.last_provider == 'Anthropic':
-            if not self.ensure_api_key('anthropic_api_key', ANTHROPIC_API_KEY_NAME):
+            if not self.ensure_api_key('anthropic_api_key', Config.ANTHROPIC_API_KEY_NAME):
                 return None
             with contextlib.redirect_stderr(io.StringIO()):
-                new_session = self.provider_factory.create_provider('Anthropic', self.anthropic_api_key, "https://api.anthropic.com/v1/messages", self.history_manager, self.last_model)
+                new_session = self.provider_factory.create_provider('Anthropic', EnvManager.get_env_variable(Config.ANTHROPIC_API_KEY_NAME), "https://api.anthropic.com/v1/messages", self.history_manager, self.last_model)
         elif self.last_provider == 'OpenAI':
-            if not self.ensure_api_key('openai_api_key', OPENAI_API_KEY_NAME):
+            if not self.ensure_api_key('openai_api_key', Config.OPENAI_API_KEY_NAME):
                 return None
             with contextlib.redirect_stderr(io.StringIO()):
-                new_session = self.provider_factory.create_provider('OpenAI', self.openai_api_key, "https://api.openai.com/v1/chat/completions", self.last_model, self.history_manager)
+                new_session = self.provider_factory.create_provider('OpenAI', EnvManager.get_env_variable(Config.OPENAI_API_KEY_NAME), "https://api.openai.com/v1/chat/completions", self.last_model, self.history_manager)
 
         if new_session:
             self.apply_saved_parameters(new_session)
@@ -1381,7 +1429,7 @@ class ChatApp:
             session.system_message = None
 
     async def handle_load_command(self, folder_name: str):
-        console.print(f"RETROCHAT_DIR: {RETROCHAT_DIR}", style="cyan")
+        console.print(f"RETROCHAT_DIR: {Config.RETROCHAT_DIR}", style="cyan")
         success = self.document_manager.load_documents(folder_name)
         if success:
             console.print(f"Documents from '{folder_name}' loaded successfully.", style="green")
@@ -1405,12 +1453,36 @@ class ChatApp:
         Answer:
         """
 
-        response = await self.current_session.send_message(prompt)
-        
         self.last_query_context = context
         self.last_query_prompt = prompt
 
-        return response
+        response_generator = self.current_session.send_message(prompt)
+        complete_response = ""
+        
+        try:
+            async for chunk in response_generator:
+                if isinstance(chunk, str):
+                    complete_response += chunk
+                    console.print(chunk, end="", style="yellow")
+                elif chunk is None:
+                    # End of streaming
+                    break
+            
+            console.print("\n")  # Add a newline after the complete response
+            
+            # Format and display the complete response
+            formatted_response, self.code_blocks = format_code_blocks(complete_response)
+            for line in formatted_response:
+                if isinstance(line, Panel):
+                    console.print(line)
+                elif isinstance(line, str):
+                    console.print(Markdown(line), style="yellow")
+                else:
+                    console.print(str(line), style="yellow")
+            
+            self.current_session.save_history()
+        except Exception as e:
+            console.print(f"An error occurred while processing the response: {str(e)}", style="bold red")
     
     async def handle_show_context(self):
         if hasattr(self, 'last_query_context') and hasattr(self, 'last_query_prompt'):
@@ -1423,10 +1495,9 @@ class ChatApp:
 
     async def start(self):
         try:
-            console.clear()
             console.print("Welcome to Retrochat! [bold green]v1.1.1[/bold green]", style="bold green")
             
-            check_and_setup()
+            self.check_and_setup()
             
             # Perform update check after displaying welcome message
             if await self.check_for_updates():
@@ -1459,6 +1530,8 @@ class ChatApp:
             console.print(f"Current provider: [blue]{provider_name}[/blue]", style="cyan")
             console.print(f"Current model: [blue]{model_name}[/blue]", style="cyan")
 
+            self.code_blocks = []
+
             while True:
                 try:
                     user_input = await self.get_multiline_input()
@@ -1477,19 +1550,50 @@ class ChatApp:
                         else:
                             console.print("Invalid query format. Use @<foldername> <question>", style="bold red")
                     elif user_input.startswith('/'):
-                        result = await self.command_handler.handle_command(user_input, self.current_session)
-                        if isinstance(result, ChatProvider):
-                            self.current_session = result
+                        if user_input.startswith('/copy '):
+                            try:
+                                block_num = int(user_input.split(' ')[1])
+                                if 0 <= block_num < len(self.code_blocks):
+                                    copy_code_to_clipboard(self.code_blocks[block_num])
+                                else:
+                                    console.print(f"Invalid code block number. Available blocks: 0-{len(self.code_blocks)-1}", style="bold red")
+                            except ValueError:
+                                console.print("Invalid block number. Please use a number.", style="bold red")
+                        else:
+                            result = await self.command_handler.handle_command(user_input, self.current_session)
+                            if isinstance(result, ChatProvider):
+                                self.current_session = result
                     elif user_input:
-                        await self.current_session.send_message(user_input)
+                        # Handle both streaming and non-streaming responses
+                        complete_response = ""
+                        async for chunk in self.current_session.send_message(user_input):
+                            if isinstance(chunk, str):
+                                complete_response += chunk
+                            elif chunk is None:
+                                # End of streaming
+                                break
+                        
+                        # Format and display the complete response
+                        formatted_response, self.code_blocks = format_code_blocks(complete_response)
+                        for line in formatted_response:
+                            if isinstance(line, Panel):
+                                console.print(line)
+                            elif isinstance(line, str):
+                                console.print(Markdown(line), style="yellow")
+                            else:
+                                console.print(str(line), style="yellow")
+                        
                         self.current_session.save_history()
                 except KeyboardInterrupt:
                     continue
                 except EOFError:
                     break
+                except Exception as e:
+                    console.print(f"An error occurred: {str(e)}", style="bold red")
+                    console.print("The application will continue running. You can try another input or exit.", style="yellow")
 
         except Exception as e:
-            console.print(f"\nAn unexpected error occurred: {e}", style="bold red")
+            console.print(f"An unexpected error occurred: {str(e)}", style="bold red")
         finally:
             if self.current_session:
                 self.current_session.save_history()
@@ -1514,7 +1618,8 @@ class ChatApp:
             with patch_stdout():
                 user_input = await prompt_session.prompt_async(
                     "",  # No prompt message
-                    bottom_toolbar=None  # No bottom toolbar message
+                    bottom_toolbar=None,  # No bottom toolbar message
+                    # Remove the is_password parameter
                 )
             return user_input.strip()
         except (EOFError, KeyboardInterrupt):
@@ -1525,8 +1630,8 @@ class ChatApp:
         repo_name = "Retrochat-v2"
         file_path = "retrochat.py"
 
-        load_dotenv(self.ENV_FILE)
-        last_commit_hash = os.getenv("LAST_COMMIT_HASH", "")
+        EnvManager.load_env_variables()
+        last_commit_hash = EnvManager.get_env_variable("LAST_COMMIT_HASH", "")
 
         url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/commits?path={file_path}&page=1&per_page=1"
         response = requests.get(url)
@@ -1560,14 +1665,14 @@ class ChatApp:
                 console.print(f"{i}. {commit_message}", style="yellow")
             
             console.print("\nDo you want to update?\n\n1. Yes\n2. No")
-            choice = Prompt.ask("", choices=["1", "2"])
+            choice = console.ask("", choices=["1", "2"])
 
             if choice == "1":
                 console.print("Updating...", style="cyan")
                 with open(__file__, 'w') as f:
                     f.write(latest_content)
-                set_key(self.ENV_FILE, "LAST_COMMIT_HASH", latest_commit_hash)
-                set_key(self.ENV_FILE, "UPDATED", "true")
+                EnvManager.set_env_variable("LAST_COMMIT_HASH", latest_commit_hash)
+                EnvManager.set_env_variable("UPDATED", "true")
                 console.print("Update complete. Please restart the script.", style="bold green")
                 return True
             else:
@@ -1575,9 +1680,101 @@ class ChatApp:
                 return False
         else:
             console.print("You're running the latest version.", style="green")
-            set_key(self.ENV_FILE, "LAST_COMMIT_HASH", latest_commit_hash)
-            set_key(self.ENV_FILE, "UPDATED", "false")
+            EnvManager.set_env_variable("LAST_COMMIT_HASH", latest_commit_hash)
+            EnvManager.set_env_variable("UPDATED", "false")
             return False
+
+    def check_and_setup(self):
+        rchat_bat_path = os.path.join(Config.RETROCHAT_DIR, "rchat.bat")
+        if not os.path.exists(rchat_bat_path) or not os.path.exists(Config.RETROCHAT_SCRIPT):
+            console.print("RetroChat Setup", style="bold cyan")
+            console.print("This setup will do the following:", style="cyan")
+            console.print("1. Create a '.retrochat' folder in your home directory", style="cyan")
+            console.print("2. Copy the RetroChat script to the '.retrochat' folder", style="cyan")
+            console.print("3. Create an 'rchat.bat' file in the '.retrochat' folder", style="cyan")
+            console.print("4. Add the '.retrochat' folder to your system PATH", style="cyan")
+            console.print("\nThis will allow you to run RetroChat from anywhere using the 'rchat' command.", style="cyan")
+            
+            response = console.ask("Do you want to proceed with the setup?", choices=["yes", "no"])
+            if response.lower() == "yes":
+                self.setup_rchat()
+            else:
+                console.print("Setup cancelled. You can run the setup later by using the --setup flag.", style="yellow")
+
+    def setup_rchat(self):
+        os.makedirs(Config.RETROCHAT_DIR, exist_ok=True)
+        
+        current_script = sys.argv[0]
+        shutil.copy2(current_script, Config.RETROCHAT_SCRIPT)
+        console.print(f"Copied RetroChat script to {Config.RETROCHAT_SCRIPT}", style="cyan")
+        
+        if sys.platform.startswith('win'):
+            rchat_bat_path = os.path.join(Config.RETROCHAT_DIR, "rchat.bat")
+            with open(rchat_bat_path, "w") as f:
+                f.write(f'@echo off\npython "{Config.RETROCHAT_SCRIPT}" %*')
+            console.print(f"Created rchat.bat at {rchat_bat_path}", style="cyan")
+        else:  # Mac or Linux
+            rchat_sh_path = os.path.join(Config.RETROCHAT_DIR, "rchat")
+            with open(rchat_sh_path, "w") as f:
+                f.write(f'#!/bin/bash\npython3 "{Config.RETROCHAT_SCRIPT}" "$@"')
+            os.chmod(rchat_sh_path, 0o755)  # Make the script executable
+            console.print(f"Created rchat shell script at {rchat_sh_path}", style="cyan")
+        
+        if not os.path.exists(Config.ENV_FILE):
+            with open(Config.ENV_FILE, "w") as f:
+                f.write(f"{Config.ANTHROPIC_API_KEY_NAME}=\n")
+                f.write(f"{Config.OPENAI_API_KEY_NAME}=\n")
+                f.write(f"{Config.GOOGLE_API_KEY_NAME}=\n")
+                f.write(f"{Config.LAST_CHAT_NAME_KEY}=default\n")
+                f.write(f"{Config.OLLAMA_IP_KEY}=localhost\n")
+                f.write(f"{Config.OLLAMA_PORT_KEY}=11434\n")
+                f.write(f"{Config.LAST_PROVIDER_KEY}=\n")
+                f.write(f"{Config.LAST_MODEL_KEY}=\n")
+            console.print(f"Created .env file at {Config.ENV_FILE}", style="cyan")
+        
+        console.print("Setup complete. You can now use the 'rchat' command from anywhere.", style="green")
+        
+        if sys.platform.startswith('win'):
+            import winreg
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_ALL_ACCESS)
+            try:
+                path, _ = winreg.QueryValueEx(key, "Path")
+                if Config.RETROCHAT_DIR not in path:
+                    new_path = f"{path};{Config.RETROCHAT_DIR}"
+                    winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, new_path)
+                    console.print(f"Added {Config.RETROCHAT_DIR} to PATH.", style="cyan")
+                else:
+                    console.print(f"{Config.RETROCHAT_DIR} is already in PATH.", style="cyan")
+            except WindowsError:
+                winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, Config.RETROCHAT_DIR)
+                console.print(f"Created PATH and added {Config.RETROCHAT_DIR}.", style="cyan")
+            finally:
+                winreg.CloseKey(key)
+        else:  # Mac or Linux
+            shell = os.environ.get("SHELL", "").split("/")[-1]
+            rc_file = f".{shell}rc" if shell in ['bash', 'zsh'] else ".profile"
+            rc_path = os.path.join(Config.USER_HOME, rc_file)
+            
+            with open(rc_path, "a") as f:
+                f.write(f'\nexport PATH="$PATH:{Config.RETROCHAT_DIR}"')
+            
+            console.print(f"Added {Config.RETROCHAT_DIR} to PATH in {rc_path}", style="cyan")
+            console.print(f"Please run 'source ~/{rc_file}' or restart your terminal for the changes to take effect.", style="cyan")
+
+        console.print("Setup complete. You can now use the 'rchat' command from anywhere.", style="green")
+
+    def display_non_default_parameters(self):
+        non_default_params = {}
+        for param, value in self.current_session.parameters.items():
+            if param in self.current_session.default_parameters:
+                if value != self.current_session.default_parameters[param]:
+                    non_default_params[param] = value
+            else:
+                non_default_params[param] = value
+        
+        if non_default_params:
+            for param, value in non_default_params.items():
+                console.print(f"{param}: {value}", style="green")
 
 def get_missed_commits(repo_owner, repo_name, file_path, last_commit_hash):
     url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/commits?path={file_path}"
@@ -1597,7 +1794,7 @@ def get_missed_commits(repo_owner, repo_name, file_path, last_commit_hash):
 
 async def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--setup":
-        setup_rchat()
+        ChatApp().setup_rchat()
     else:
         app = ChatApp()
         await app.start()
