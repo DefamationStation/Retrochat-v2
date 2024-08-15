@@ -1461,15 +1461,13 @@ class ChatApp:
         complete_response = ""
         
         try:
+            complete_response = ""
             async for chunk in response_generator:
                 if isinstance(chunk, str):
                     complete_response += chunk
-                    console.print(chunk, end="", style="yellow")
                 elif chunk is None:
                     # End of streaming
                     break
-            
-            console.print("\n")  # Add a newline after the complete response
             
             # Format and display the complete response
             formatted_response, self.code_blocks = format_code_blocks(complete_response)
