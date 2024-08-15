@@ -1632,55 +1632,60 @@ class ChatApp:
         EnvManager.load_env_variables()
         last_commit_hash = EnvManager.get_env_variable("LAST_COMMIT_HASH", "")
 
-        url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/commits?path={file_path}&page=1&per_page=1"
-        response = requests.get(url)
-        if response.status_code != 200:
-            console.print(f"Failed to check for updates: {response.status_code}", style="bold red")
-            return False
+        try:
+            url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/commits?path={file_path}&page=1&per_page=1"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=5) as response:
+                    if response.status == 200:
+                        latest_commit = (await response.json())[0]
+                        latest_commit_hash = latest_commit['sha']
 
-        latest_commit = response.json()[0]
-        latest_commit_hash = latest_commit['sha']
+                        if latest_commit_hash == last_commit_hash:
+                            console.print("You're running the latest version.", style="green")
+                            return False
 
-        if latest_commit_hash == last_commit_hash:
-            console.print("You're running the latest version.", style="green")
-            return False
+                        missed_commits = get_missed_commits(repo_owner, repo_name, file_path, last_commit_hash)
 
-        missed_commits = get_missed_commits(repo_owner, repo_name, file_path, last_commit_hash)
+                        url = f"https://raw.githubusercontent.com/{repo_owner}/{repo_name}/{latest_commit_hash}/{file_path}"
+                        async with session.get(url, timeout=5) as response:
+                            if response.status == 200:
+                                latest_content = await response.text()
 
-        url = f"https://raw.githubusercontent.com/{repo_owner}/{repo_name}/{latest_commit_hash}/{file_path}"
-        response = requests.get(url)
-        if response.status_code != 200:
-            console.print(f"Failed to fetch the latest version: {response.status_code}", style="bold red")
-            return False
+                                with open(__file__, 'r') as f:
+                                    current_content = f.read()
 
-        latest_content = response.text
+                                if hashlib.sha256(current_content.encode()).hexdigest() != hashlib.sha256(latest_content.encode()).hexdigest():
+                                    console.print("Updates are available:", style="bold yellow")
+                                    for i, commit_message in enumerate(missed_commits, 1):
+                                        console.print(f"{i}. {commit_message}", style="yellow")
 
-        with open(__file__, 'r') as f:
-            current_content = f.read()
+                                    console.print("\nDo you want to update?\n\n1. Yes\n2. No")
+                                    choice = console.ask("", choices=["1", "2"])
 
-        if hashlib.sha256(current_content.encode()).hexdigest() != hashlib.sha256(latest_content.encode()).hexdigest():
-            console.print("Updates are available:", style="bold yellow")
-            for i, commit_message in enumerate(missed_commits, 1):
-                console.print(f"{i}. {commit_message}", style="yellow")
-            
-            console.print("\nDo you want to update?\n\n1. Yes\n2. No")
-            choice = console.ask("", choices=["1", "2"])
-
-            if choice == "1":
-                console.print("Updating...", style="cyan")
-                with open(__file__, 'w') as f:
-                    f.write(latest_content)
-                EnvManager.set_env_variable("LAST_COMMIT_HASH", latest_commit_hash)
-                EnvManager.set_env_variable("UPDATED", "true")
-                console.print("Update complete. Please restart the script.", style="bold green")
-                return True
-            else:
-                console.print("Update skipped. Running current version.", style="yellow")
-                return False
-        else:
-            console.print("You're running the latest version.", style="green")
-            EnvManager.set_env_variable("LAST_COMMIT_HASH", latest_commit_hash)
-            EnvManager.set_env_variable("UPDATED", "false")
+                                    if choice == "1":
+                                        console.print("Updating...", style="cyan")
+                                        with open(__file__, 'w') as f:
+                                            f.write(latest_content)
+                                        EnvManager.set_env_variable("LAST_COMMIT_HASH", latest_commit_hash)
+                                        EnvManager.set_env_variable("UPDATED", "true")
+                                        console.print("Update complete. Please restart the script.", style="bold green")
+                                        return True
+                                    else:
+                                        console.print("Update skipped. Running current version.", style="yellow")
+                                        return False
+                                else:
+                                    console.print("You're running the latest version.", style="green")
+                                    EnvManager.set_env_variable("LAST_COMMIT_HASH", latest_commit_hash)
+                                    EnvManager.set_env_variable("UPDATED", "false")
+                                    return False
+                            else:
+                                console.print(f"Failed to fetch the latest version: {response.status}", style="bold red")
+                                return False
+                    else:
+                        console.print(f"Failed to check for updates: {response.status}", style="bold red")
+                        return False
+        except (aiohttp.ClientError, asyncio.TimeoutError):
+            console.print("Unable to connect to GitHub. Skipping update check.", style="yellow")
             return False
 
     def check_and_setup(self):
