@@ -62,6 +62,7 @@ def lazy_import(module_path, class_name=None):
     
 # Lazy imports
 tiktoken = lazy_import('tiktoken')
+google_genai = lazy_import('google.generativeai')
 Chroma = lazy_import('langchain_chroma', 'Chroma')
 TextLoader = lazy_import('langchain_community.document_loaders.text', 'TextLoader')
 UnstructuredWordDocumentLoader = lazy_import('langchain_community.document_loaders.word_document', 'UnstructuredWordDocumentLoader')
@@ -648,13 +649,18 @@ class GoogleChatSession(ChatProvider):
         
         # Configure the Google AI library
         with SuppressLogging():
-            client_options = client_options_lib.ClientOptions(
-                api_endpoint="generativelanguage.googleapis.com"
-            )
-            genai.configure(api_key=self.api_key, client_options=client_options)
-            
-            self.genai_model = genai.GenerativeModel(self.model)
-            self.chat = self.genai_model.start_chat(history=[])
+            if google_genai:
+                client_options = client_options_lib.ClientOptions(
+                    api_endpoint="generativelanguage.googleapis.com"
+                )
+                google_genai.configure(api_key=self.api_key, client_options=client_options)
+                
+                self.genai_model = google_genai.GenerativeModel(self.model)
+                self.chat = self.genai_model.start_chat(history=[])
+            else:
+                console.print("Google AI library is not installed. Google provider will not be available.", style="yellow")
+                self.genai_model = None
+                self.chat = None
 
         self.default_parameters.update({
             "candidate_count": 1,
@@ -663,9 +669,13 @@ class GoogleChatSession(ChatProvider):
         })
 
     async def send_message(self, message: str):
+        if not google_genai or not self.genai_model:
+            yield "Error: Google AI library is not installed or configured properly."
+            return
+
         self.add_to_history("user", message)
         
-        generation_config = genai.types.GenerationConfig(
+        generation_config = google_genai.types.GenerationConfig(
             candidate_count=self.parameters.get("candidate_count", 1),
             max_output_tokens=self.parameters.get("max_tokens", 8192),
             temperature=self.parameters.get("temperature", 0.8),
@@ -677,7 +687,7 @@ class GoogleChatSession(ChatProvider):
                     self.chat.send_message,
                     message,
                     generation_config=generation_config,
-                    stream=False  # Changed to False as the API doesn't support streaming
+                    stream=False
                 )
 
             complete_message = response.text
@@ -690,7 +700,7 @@ class GoogleChatSession(ChatProvider):
                 console.print(f"Response tokens: {tokens}", style="cyan")
                 console.print(f"Total conversation tokens: {total_tokens}", style="cyan")
             
-            yield formatted_message  # Yield the formatted message
+            yield formatted_message
         except Exception as e:
             error_message = f"Error in Google API: {str(e)}"
             console.print(error_message, style="bold red")
