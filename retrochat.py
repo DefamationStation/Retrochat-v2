@@ -17,6 +17,7 @@ import warnings
 import contextlib
 import io
 import pyperclip
+import importlib
 from google.api_core import client_options as client_options_lib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -43,7 +44,35 @@ class SuppressLogging:
 
     def __exit__(self, exit_type, exit_value, exit_traceback):
         logging.disable(logging.NOTSET)
-
+# Lazy imports for tiktoken and ChromaDB
+def lazy_import(module_path, class_name=None):
+    try:
+        module = importlib.import_module(module_path)
+        if class_name:
+            return getattr(module, class_name)
+        return module
+    except (ImportError, AttributeError):
+        if class_name:
+            return None
+        else:
+            class LazyLoader:
+                def __getattr__(self, name):
+                    return None
+            return LazyLoader()
+    
+# Lazy imports
+tiktoken = lazy_import('tiktoken')
+Chroma = lazy_import('langchain_chroma', 'Chroma')
+TextLoader = lazy_import('langchain_community.document_loaders.text', 'TextLoader')
+UnstructuredWordDocumentLoader = lazy_import('langchain_community.document_loaders.word_document', 'UnstructuredWordDocumentLoader')
+UnstructuredMarkdownLoader = lazy_import('langchain_community.document_loaders.markdown', 'UnstructuredMarkdownLoader')
+DirectoryLoader = lazy_import('langchain_community.document_loaders.directory', 'DirectoryLoader')
+BaseLoader = lazy_import('langchain_community.document_loaders.base', 'BaseLoader')
+RecursiveCharacterTextSplitter = lazy_import('langchain_text_splitters', 'RecursiveCharacterTextSplitter')
+Document = lazy_import('langchain_core.documents', 'Document')
+SentenceTransformerEmbeddings = lazy_import('langchain_community.embeddings.sentence_transformer', 'SentenceTransformerEmbeddings')
+OllamaEmbeddings = lazy_import('langchain_community.embeddings.ollama', 'OllamaEmbeddings')
+    
 class Config:
     USER_HOME = os.path.expanduser('~')
     RETROCHAT_DIR = os.path.join(USER_HOME, '.retrochat')
@@ -937,6 +966,10 @@ class DocumentManager:
         self.embedding_function = get_embedding_function()
 
     def load_documents(self, folder_name: str) -> bool:
+        if not Chroma or not Document:
+            console.print("Error: Required document processing libraries are not installed.", style="bold red")
+            return False
+        
         data_path = os.path.join(Config.RETROCHAT_DIR, folder_name)
         console.print(f"Attempting to load documents from: {data_path}", style="cyan")
         
@@ -966,21 +999,29 @@ class DocumentManager:
             console.print(f"Error loading documents: {str(e)}", style="bold red")
             return False
 
-    def get_loader_for_file(self, file_path: str) -> BaseLoader:
+    def get_loader_for_file(self, file_path: str) -> Optional[BaseLoader]:
+        if not BaseLoader:
+            console.print("Error: Document loaders are not installed.", style="bold red")
+            return None
+        
         _, ext = os.path.splitext(file_path.lower())
-        if ext == '.pdf':
-            return PyPDFDirectoryLoader(os.path.dirname(file_path))
-        elif ext == '.txt':
+        if ext == '.pdf' and DirectoryLoader:
+            return DirectoryLoader(os.path.dirname(file_path), glob="*.pdf")
+        elif ext == '.txt' and TextLoader:
             return TextLoader(file_path)
-        elif ext in ['.doc', '.docx']:
+        elif ext in ['.doc', '.docx'] and UnstructuredWordDocumentLoader:
             return UnstructuredWordDocumentLoader(file_path)
-        elif ext == '.md':
+        elif ext == '.md' and UnstructuredMarkdownLoader:
             return UnstructuredMarkdownLoader(file_path)
         else:
-            console.print(f"Unsupported file type: {file_path}", style="yellow")
+            console.print(f"Unsupported file type or loader not available: {file_path}", style="yellow")
             return None
-
+        
     def split_documents(self, documents: List[Document]):
+        if not RecursiveCharacterTextSplitter:
+            console.print("Error: RecursiveCharacterTextSplitter is not installed.", style="bold red")
+            return documents
+        
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=800,
             chunk_overlap=80,
@@ -990,6 +1031,10 @@ class DocumentManager:
         return text_splitter.split_documents(documents)
 
     def add_to_chroma(self, chunks: List[Document], folder_name: str):
+        if not Chroma:
+            console.print("Error: ChromaDB is not installed. Cannot add documents to database.", style="bold red")
+            return
+        
         db = Chroma(persist_directory=self.chroma_path, embedding_function=self.embedding_function)
 
         chunks_with_ids = self.calculate_chunk_ids(chunks, folder_name)
@@ -1032,6 +1077,10 @@ class DocumentManager:
         return chunks
 
     def query_documents(self, folder_name: str, query: str) -> List[Document]:
+        if not Chroma:
+            console.print("Error: ChromaDB is not installed. Cannot query documents.", style="bold red")
+            return []
+        
         db = Chroma(persist_directory=self.chroma_path, embedding_function=self.embedding_function)
         all_docs = db.get()
         
@@ -1052,6 +1101,11 @@ def get_embedding_function():
     EnvManager.load_env_variables()
     ollama_ip = EnvManager.get_env_variable(Config.OLLAMA_IP_KEY, 'localhost')
     ollama_port = EnvManager.get_env_variable(Config.OLLAMA_PORT_KEY, '11434')
+    
+    if not OllamaEmbeddings:
+        console.print("Warning: OllamaEmbeddings is not installed. Using fallback embedding function.", style="yellow")
+        return lambda x: [0] * 1536  # Fallback to a dummy embedding function
+    
     return OllamaEmbeddings(
         base_url=f"http://{ollama_ip}:{ollama_port}",
         model="nomic-embed-text"
