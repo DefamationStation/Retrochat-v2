@@ -1130,6 +1130,7 @@ def get_embedding_function():
 class CodeBlockFormatter:
     def __init__(self):
         self.total_blocks = 0
+        self.unclosed_block = None
 
     def format_code_blocks(self, text):
         if not isinstance(text, str):
@@ -1141,17 +1142,18 @@ class CodeBlockFormatter:
         code_block = []
         language = ''
 
+        # If there's an unclosed block from previous call, start with it
+        if self.unclosed_block:
+            in_code_block = True
+            code_block, language = self.unclosed_block
+            self.unclosed_block = None
+            formatted_lines.append("... (continuing previous code block)")
+
         for line in lines:
             if line.startswith('```'):
                 if in_code_block:
                     # End of code block
-                    code = '\n'.join(code_block)
-                    syntax = Syntax(code, language, theme="monokai", line_numbers=True)
-                    panel = Panel(syntax, border_style="bold", expand=False)
-                    formatted_lines.append(panel)
-                    self.total_blocks += 1
-                    formatted_lines.append(f'Code Block {self.total_blocks}')
-                    code_blocks.append(code)
+                    self._format_and_add_block(code_block, language, formatted_lines, code_blocks)
                     in_code_block = False
                     code_block = []
                     language = ''
@@ -1164,12 +1166,31 @@ class CodeBlockFormatter:
             else:
                 formatted_lines.append(line)
 
+        # Handle case where code block is not closed
+        if in_code_block:
+            # Format the incomplete block
+            self._format_and_add_block(code_block, language, formatted_lines, code_blocks, is_complete=False)
+            self.unclosed_block = (code_block, language)
+
         return formatted_lines, code_blocks
+
+
+    def _format_and_add_block(self, code_block, language, formatted_lines, code_blocks, is_complete=True):
+        code = '\n'.join(code_block)
+        syntax = Syntax(code, language, theme="monokai", line_numbers=True)
+        if not is_complete:
+            syntax = Syntax(code + "\n...", language, theme="monokai", line_numbers=True)
+        panel = Panel(syntax, border_style="bold", expand=False)
+        formatted_lines.append(panel)
+        self.total_blocks += 1
+        block_status = "" if is_complete else " (incomplete)"
+        formatted_lines.append(f'Code Block {self.total_blocks}{block_status}')
+        code_blocks.append(code)
 
     def reset(self):
         self.total_blocks = 0
+        self.unclosed_block = None
 
-# Usage
 formatter = CodeBlockFormatter()
 
 def format_code_blocks(text):
