@@ -10,14 +10,14 @@ import tempfile
 import subprocess
 import hashlib
 import platform
-import google.generativeai as genai
+#import google.generativeai as genai
 import shutil
 import tiktoken
 import warnings
 import contextlib
 import io
 import pyperclip
-import importlib
+from importlib import import_module
 from google.api_core import client_options as client_options_lib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -45,9 +45,9 @@ class SuppressLogging:
     def __exit__(self, exit_type, exit_value, exit_traceback):
         logging.disable(logging.NOTSET)
 # Lazy imports for tiktoken and ChromaDB
-def lazy_import(module_path, class_name=None):
+def lazy_import(module_name, class_name=None):
     try:
-        module = importlib.import_module(module_path)
+        module = import_module(module_name)
         if class_name:
             return getattr(module, class_name)
         return module
@@ -63,6 +63,7 @@ def lazy_import(module_path, class_name=None):
 # Lazy imports
 tiktoken = lazy_import('tiktoken')
 google_genai = lazy_import('google.generativeai')
+google_client_options = lazy_import('google.api_core.client_options')
 Chroma = lazy_import('langchain_chroma', 'Chroma')
 TextLoader = lazy_import('langchain_community.document_loaders.text', 'TextLoader')
 UnstructuredWordDocumentLoader = lazy_import('langchain_community.document_loaders.word_document', 'UnstructuredWordDocumentLoader')
@@ -649,8 +650,8 @@ class GoogleChatSession(ChatProvider):
         
         # Configure the Google AI library
         with SuppressLogging():
-            if google_genai:
-                client_options = client_options_lib.ClientOptions(
+            if google_genai and google_client_options:
+                client_options = google_client_options.ClientOptions(
                     api_endpoint="generativelanguage.googleapis.com"
                 )
                 google_genai.configure(api_key=self.api_key, client_options=client_options)
@@ -839,6 +840,9 @@ class ChatProviderFactory:
         }
         provider_class = providers.get(provider_type)
         if provider_class:
+            if provider_type == 'Google' and (not google_genai or not google_client_options):
+                console.print("Google AI library is not installed. Cannot create Google provider.", style="bold red")
+                return None
             return provider_class(*args, **kwargs)
         raise ValueError(f"Unsupported provider type: {provider_type}")
 
