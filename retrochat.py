@@ -18,7 +18,7 @@ import contextlib
 import io
 import pyperclip
 from importlib import import_module
-from google.api_core import client_options as client_options_lib
+#from google.api_core import client_options as client_options_lib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any, Union
@@ -63,7 +63,7 @@ def lazy_import(module_name, class_name=None):
 # Lazy imports
 tiktoken = lazy_import('tiktoken')
 google_genai = lazy_import('google.generativeai')
-google_client_options = lazy_import('google.api_core.client_options')
+google_client_options = lazy_import('google.api_core.client_options', 'ClientOptions')
 Chroma = lazy_import('langchain_chroma', 'Chroma')
 TextLoader = lazy_import('langchain_community.document_loaders.text', 'TextLoader')
 UnstructuredWordDocumentLoader = lazy_import('langchain_community.document_loaders.word_document', 'UnstructuredWordDocumentLoader')
@@ -651,7 +651,7 @@ class GoogleChatSession(ChatProvider):
         # Configure the Google AI library
         with SuppressLogging():
             if google_genai and google_client_options:
-                client_options = google_client_options.ClientOptions(
+                client_options = google_client_options(
                     api_endpoint="generativelanguage.googleapis.com"
                 )
                 google_genai.configure(api_key=self.api_key, client_options=client_options)
@@ -845,7 +845,7 @@ class ChatProviderFactory:
                 return None
             return provider_class(*args, **kwargs)
         raise ValueError(f"Unsupported provider type: {provider_type}")
-
+    
 class CommandHandler:
     def __init__(self, history_manager: ChatHistoryManager, chat_app):
         self.history_manager = history_manager
