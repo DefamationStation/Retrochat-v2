@@ -1754,6 +1754,16 @@ class ChatApp:
                     if user_input.lower() == '/exit':
                         console.print("Thank you for chatting. Goodbye!", style="cyan")
                         break
+                    elif user_input.startswith('/load '):
+                        folder_name = user_input.split(' ', 1)[1]
+                        await self.handle_load_command(folder_name)
+                    elif user_input.startswith('@'):
+                        parts = user_input[1:].split(' ', 1)
+                        if len(parts) == 2:
+                            folder_name, query = parts
+                            await self.handle_query_command(folder_name, query)
+                        else:
+                            console.print("Invalid query format. Use @<foldername> <question>", style="bold red")
                     elif user_input.startswith('/'):
                         if user_input.startswith('/copy '):
                             try:
