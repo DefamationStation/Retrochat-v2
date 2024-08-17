@@ -30,7 +30,7 @@ To run RetroChat, you need Python 3.11 or higher installed on your system. [Link
    or place them in the 'C:\Users\your username\\.retrochat' directory.
 2. Navigate to the project directory or right-click in the directory and select 'Open in Terminal'.
    ```
-   cd C:\Users\<you username\.retrochat
+   cd C:\Users\<your username>\.retrochat
    ```
 3. Install the required packages:
    ```
