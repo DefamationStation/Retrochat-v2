@@ -10,15 +10,14 @@ import tempfile
 import subprocess
 import hashlib
 import platform
-#import google.generativeai as genai
+import google.generativeai as genai
 import shutil
 import tiktoken
 import warnings
 import contextlib
 import io
 import pyperclip
-from importlib import import_module
-#from google.api_core import client_options as client_options_lib
+from google.api_core import client_options as client_options_lib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any, Union
@@ -44,37 +43,7 @@ class SuppressLogging:
 
     def __exit__(self, exit_type, exit_value, exit_traceback):
         logging.disable(logging.NOTSET)
-# Lazy imports for tiktoken and ChromaDB
-def lazy_import(module_name, class_name=None):
-    try:
-        module = import_module(module_name)
-        if class_name:
-            return getattr(module, class_name)
-        return module
-    except (ImportError, AttributeError):
-        if class_name:
-            return None
-        else:
-            class LazyLoader:
-                def __getattr__(self, name):
-                    return None
-            return LazyLoader()
-    
-# Lazy imports
-tiktoken = lazy_import('tiktoken')
-google_genai = lazy_import('google.generativeai')
-google_client_options = lazy_import('google.api_core.client_options', 'ClientOptions')
-Chroma = lazy_import('langchain_chroma', 'Chroma')
-TextLoader = lazy_import('langchain_community.document_loaders.text', 'TextLoader')
-UnstructuredWordDocumentLoader = lazy_import('langchain_community.document_loaders.word_document', 'UnstructuredWordDocumentLoader')
-UnstructuredMarkdownLoader = lazy_import('langchain_community.document_loaders.markdown', 'UnstructuredMarkdownLoader')
-DirectoryLoader = lazy_import('langchain_community.document_loaders.directory', 'DirectoryLoader')
-BaseLoader = lazy_import('langchain_community.document_loaders.base', 'BaseLoader')
-RecursiveCharacterTextSplitter = lazy_import('langchain_text_splitters', 'RecursiveCharacterTextSplitter')
-Document = lazy_import('langchain_core.documents', 'Document')
-SentenceTransformerEmbeddings = lazy_import('langchain_community.embeddings.sentence_transformer', 'SentenceTransformerEmbeddings')
-OllamaEmbeddings = lazy_import('langchain_community.embeddings.ollama', 'OllamaEmbeddings')
-    
+
 class Config:
     USER_HOME = os.path.expanduser('~')
     RETROCHAT_DIR = os.path.join(USER_HOME, '.retrochat')
@@ -650,18 +619,13 @@ class GoogleChatSession(ChatProvider):
         
         # Configure the Google AI library
         with SuppressLogging():
-            if google_genai and google_client_options:
-                client_options = google_client_options(
-                    api_endpoint="generativelanguage.googleapis.com"
-                )
-                google_genai.configure(api_key=self.api_key, client_options=client_options)
-                
-                self.genai_model = google_genai.GenerativeModel(self.model)
-                self.chat = self.genai_model.start_chat(history=[])
-            else:
-                console.print("Google AI library is not installed. Google provider will not be available.", style="yellow")
-                self.genai_model = None
-                self.chat = None
+            client_options = client_options_lib.ClientOptions(
+                api_endpoint="generativelanguage.googleapis.com"
+            )
+            genai.configure(api_key=self.api_key, client_options=client_options)
+            
+            self.genai_model = genai.GenerativeModel(self.model)
+            self.chat = self.genai_model.start_chat(history=[])
 
         self.default_parameters.update({
             "candidate_count": 1,
@@ -670,13 +634,9 @@ class GoogleChatSession(ChatProvider):
         })
 
     async def send_message(self, message: str):
-        if not google_genai or not self.genai_model:
-            yield "Error: Google AI library is not installed or configured properly."
-            return
-
         self.add_to_history("user", message)
         
-        generation_config = google_genai.types.GenerationConfig(
+        generation_config = genai.types.GenerationConfig(
             candidate_count=self.parameters.get("candidate_count", 1),
             max_output_tokens=self.parameters.get("max_tokens", 8192),
             temperature=self.parameters.get("temperature", 0.8),
@@ -688,7 +648,7 @@ class GoogleChatSession(ChatProvider):
                     self.chat.send_message,
                     message,
                     generation_config=generation_config,
-                    stream=False
+                    stream=False  # Changed to False as the API doesn't support streaming
                 )
 
             complete_message = response.text
@@ -701,7 +661,7 @@ class GoogleChatSession(ChatProvider):
                 console.print(f"Response tokens: {tokens}", style="cyan")
                 console.print(f"Total conversation tokens: {total_tokens}", style="cyan")
             
-            yield formatted_message
+            yield formatted_message  # Yield the formatted message
         except Exception as e:
             error_message = f"Error in Google API: {str(e)}"
             console.print(error_message, style="bold red")
@@ -840,12 +800,9 @@ class ChatProviderFactory:
         }
         provider_class = providers.get(provider_type)
         if provider_class:
-            if provider_type == 'Google' and (not google_genai or not google_client_options):
-                console.print("Google AI library is not installed. Cannot create Google provider.", style="bold red")
-                return None
             return provider_class(*args, **kwargs)
         raise ValueError(f"Unsupported provider type: {provider_type}")
-    
+
 class CommandHandler:
     def __init__(self, history_manager: ChatHistoryManager, chat_app):
         self.history_manager = history_manager
@@ -982,10 +939,6 @@ class DocumentManager:
         self.embedding_function = get_embedding_function()
 
     def load_documents(self, folder_name: str) -> bool:
-        if not Chroma or not Document:
-            console.print("Error: Required document processing libraries are not installed.", style="bold red")
-            return False
-        
         data_path = os.path.join(Config.RETROCHAT_DIR, folder_name)
         console.print(f"Attempting to load documents from: {data_path}", style="cyan")
         
@@ -1015,29 +968,21 @@ class DocumentManager:
             console.print(f"Error loading documents: {str(e)}", style="bold red")
             return False
 
-    def get_loader_for_file(self, file_path: str) -> Optional[BaseLoader]:
-        if not BaseLoader:
-            console.print("Error: Document loaders are not installed.", style="bold red")
-            return None
-        
+    def get_loader_for_file(self, file_path: str) -> BaseLoader:
         _, ext = os.path.splitext(file_path.lower())
-        if ext == '.pdf' and DirectoryLoader:
-            return DirectoryLoader(os.path.dirname(file_path), glob="*.pdf")
-        elif ext == '.txt' and TextLoader:
+        if ext == '.pdf':
+            return PyPDFDirectoryLoader(os.path.dirname(file_path))
+        elif ext == '.txt':
             return TextLoader(file_path)
-        elif ext in ['.doc', '.docx'] and UnstructuredWordDocumentLoader:
+        elif ext in ['.doc', '.docx']:
             return UnstructuredWordDocumentLoader(file_path)
-        elif ext == '.md' and UnstructuredMarkdownLoader:
+        elif ext == '.md':
             return UnstructuredMarkdownLoader(file_path)
         else:
-            console.print(f"Unsupported file type or loader not available: {file_path}", style="yellow")
+            console.print(f"Unsupported file type: {file_path}", style="yellow")
             return None
-        
+
     def split_documents(self, documents: List[Document]):
-        if not RecursiveCharacterTextSplitter:
-            console.print("Error: RecursiveCharacterTextSplitter is not installed.", style="bold red")
-            return documents
-        
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=800,
             chunk_overlap=80,
@@ -1047,10 +992,6 @@ class DocumentManager:
         return text_splitter.split_documents(documents)
 
     def add_to_chroma(self, chunks: List[Document], folder_name: str):
-        if not Chroma:
-            console.print("Error: ChromaDB is not installed. Cannot add documents to database.", style="bold red")
-            return
-        
         db = Chroma(persist_directory=self.chroma_path, embedding_function=self.embedding_function)
 
         chunks_with_ids = self.calculate_chunk_ids(chunks, folder_name)
@@ -1093,10 +1034,6 @@ class DocumentManager:
         return chunks
 
     def query_documents(self, folder_name: str, query: str) -> List[Document]:
-        if not Chroma:
-            console.print("Error: ChromaDB is not installed. Cannot query documents.", style="bold red")
-            return []
-        
         db = Chroma(persist_directory=self.chroma_path, embedding_function=self.embedding_function)
         all_docs = db.get()
         
@@ -1117,11 +1054,6 @@ def get_embedding_function():
     EnvManager.load_env_variables()
     ollama_ip = EnvManager.get_env_variable(Config.OLLAMA_IP_KEY, 'localhost')
     ollama_port = EnvManager.get_env_variable(Config.OLLAMA_PORT_KEY, '11434')
-    
-    if not OllamaEmbeddings:
-        console.print("Warning: OllamaEmbeddings is not installed. Using fallback embedding function.", style="yellow")
-        return lambda x: [0] * 1536  # Fallback to a dummy embedding function
-    
     return OllamaEmbeddings(
         base_url=f"http://{ollama_ip}:{ollama_port}",
         model="nomic-embed-text"
@@ -1130,7 +1062,6 @@ def get_embedding_function():
 class CodeBlockFormatter:
     def __init__(self):
         self.total_blocks = 0
-        self.unclosed_block = None
 
     def format_code_blocks(self, text):
         if not isinstance(text, str):
@@ -1142,18 +1073,17 @@ class CodeBlockFormatter:
         code_block = []
         language = ''
 
-        # If there's an unclosed block from previous call, start with it
-        if self.unclosed_block:
-            in_code_block = True
-            code_block, language = self.unclosed_block
-            self.unclosed_block = None
-            formatted_lines.append("... (continuing previous code block)")
-
         for line in lines:
             if line.startswith('```'):
                 if in_code_block:
                     # End of code block
-                    self._format_and_add_block(code_block, language, formatted_lines, code_blocks)
+                    code = '\n'.join(code_block)
+                    syntax = Syntax(code, language, theme="monokai", line_numbers=True)
+                    panel = Panel(syntax, border_style="bold", expand=False)
+                    formatted_lines.append(panel)
+                    self.total_blocks += 1
+                    formatted_lines.append(f'Code Block {self.total_blocks}')
+                    code_blocks.append(code)
                     in_code_block = False
                     code_block = []
                     language = ''
@@ -1166,31 +1096,12 @@ class CodeBlockFormatter:
             else:
                 formatted_lines.append(line)
 
-        # Handle case where code block is not closed
-        if in_code_block:
-            # Format the incomplete block
-            self._format_and_add_block(code_block, language, formatted_lines, code_blocks, is_complete=False)
-            self.unclosed_block = (code_block, language)
-
         return formatted_lines, code_blocks
-
-
-    def _format_and_add_block(self, code_block, language, formatted_lines, code_blocks, is_complete=True):
-        code = '\n'.join(code_block)
-        syntax = Syntax(code, language, theme="monokai", line_numbers=True)
-        if not is_complete:
-            syntax = Syntax(code + "\n...", language, theme="monokai", line_numbers=True)
-        panel = Panel(syntax, border_style="bold", expand=False)
-        formatted_lines.append(panel)
-        self.total_blocks += 1
-        block_status = "" if is_complete else " (incomplete)"
-        formatted_lines.append(f'Code Block {self.total_blocks}{block_status}')
-        code_blocks.append(code)
 
     def reset(self):
         self.total_blocks = 0
-        self.unclosed_block = None
 
+# Usage
 formatter = CodeBlockFormatter()
 
 def format_code_blocks(text):
@@ -1576,8 +1487,7 @@ class ChatApp:
                     break
             
             # Format and display the complete response
-            formatted_response, code_blocks = format_code_blocks(complete_response)
-            self.code_blocks.extend(code_blocks)
+            formatted_response, self.code_blocks = format_code_blocks(complete_response)
             for line in formatted_response:
                 if isinstance(line, Panel):
                     console.print(line)
@@ -1659,10 +1569,10 @@ class ChatApp:
                         if user_input.startswith('/copy '):
                             try:
                                 block_num = int(user_input.split(' ')[1])
-                                if 1 <= block_num <= len(self.code_blocks):
-                                    copy_code_to_clipboard(self.code_blocks[block_num - 1])
+                                if 0 <= block_num < len(self.code_blocks):
+                                    copy_code_to_clipboard(self.code_blocks[block_num])
                                 else:
-                                    console.print(f"Invalid code block number. Available blocks: 1-{len(self.code_blocks)}", style="bold red")
+                                    console.print(f"Invalid code block number. Available blocks: 0-{len(self.code_blocks)-1}", style="bold red")
                             except ValueError:
                                 console.print("Invalid block number. Please use a number.", style="bold red")
                         else:
@@ -1680,8 +1590,7 @@ class ChatApp:
                                 break
                         
                         # Format and display the complete response
-                        formatted_response, code_blocks = format_code_blocks(complete_response)
-                        self.code_blocks.extend(code_blocks)        
+                        formatted_response, self.code_blocks = format_code_blocks(complete_response)
                         for line in formatted_response:
                             if isinstance(line, Panel):
                                 console.print(line)
