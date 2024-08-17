@@ -279,6 +279,7 @@ class ChatProvider(ABC):
             "verbose": False,
             "frequency_penalty": 1.1,
             "repeat_penalty": 1.1,
+            "use_markdown": True,
         }
         self.tokenizer_manager = TokenizerManager()
 
@@ -325,11 +326,14 @@ class ChatProvider(ABC):
         self.history_manager.save_system_message(message)
 
     def format_message(self, message: str) -> str:
-        message = message.strip()
-        paragraphs = message.split('\n\n')
-        paragraphs = [p.strip() for p in paragraphs if p.strip()]
-        formatted_message = '\n\n'.join(paragraphs)
-        return formatted_message
+        if self.parameters.get("use_markdown", True):
+            message = message.strip()
+            paragraphs = message.split('\n\n')
+            paragraphs = [p.strip() for p in paragraphs if p.strip()]
+            formatted_message = '\n\n'.join(paragraphs)
+            return formatted_message
+        else:
+            return message
 
     def set_parameter(self, param: str, value: Any):
         if isinstance(value, int) and param not in ["num_predict", "top_k", "repeat_last_n", "num_ctx", "candidate_count", "max_tokens"]:
@@ -351,7 +355,10 @@ class ChatProvider(ABC):
                 self.parameters[param] = value
             
             self.history_manager.save_parameters(self.parameters)
-            
+
+            if param == "use_markdown":
+                value = str(value).lower() == "true"
+
             if param != "verbose" or value:
                 console.print(f"Parameter '{param}' set to {value}", style="cyan")
                 if param == "max_tokens":
@@ -758,10 +765,11 @@ class OllamaChatSession(ChatProvider):
                         if line:
                             response_json = json.loads(line)
                             message_content = response_json.get('message', {}).get('content', '')
-                            complete_message += message_content
-                            yield message_content  # Yield each chunk for streaming
-                            if response_json.get('done', False):
-                                break
+                            if message_content:
+                                complete_message += message_content
+                                yield message_content  # Always yield the content
+                                if response_json.get('done', False):
+                                    break
                     
                     formatted_message = self.format_message(complete_message)
                     self.add_to_history("assistant", formatted_message)
@@ -769,11 +777,10 @@ class OllamaChatSession(ChatProvider):
                     if self.parameters.get("verbose", False):
                         tokens = self.calculate_tokens(formatted_message)
                         total_tokens = self.calculate_total_tokens()
-                        console.print(f"Response tokens: {tokens}", style="cyan")
+                        console.print(f"\nResponse tokens: {tokens}", style="cyan")
                         console.print(f"Total conversation tokens: {total_tokens}", style="cyan")
                     
                     yield None  # Signal end of streaming
-                    yield formatted_message  # Yield the formatted message as the last item
                 else:
                     error_message = f"Error: {response.status} - {await response.text()}"
                     console.print(error_message, style="bold red")
@@ -911,6 +918,8 @@ class CommandHandler:
                 session.show_parameters()
             else:
                 self.handle_set(args[0], args[1], session)
+        elif cmd == '/markdown':
+            self.handle_markdown(args[0], session)
         elif cmd == '/edit':
             try:
                 await self.chat_app.edit_conversation(session)
@@ -996,9 +1005,19 @@ class CommandHandler:
             return new_session
         return session
 
+    def handle_markdown(self, value: str, session: ChatProvider):
+        if value.lower() in ['true', 'false']:
+            use_markdown = value.lower() == 'true'
+            session.set_parameter('use_markdown', use_markdown)
+            status = "enabled" if use_markdown else "disabled"
+            console.print(f"Markdown formatting {status}.", style="cyan")
+        else:
+            console.print("Invalid value. Use '/markdown true' or '/markdown false'.", style="bold red")
+
     def display_help(self):
         console.print("Available commands:", style="cyan")
         console.print("/copy <code block number> for example '/copy 0' to copy an entire code block.")
+        console.print("/markdown true|false - Enable or disable markdown formatting", style="green")
         console.print("/chat rename <new_name> - Rename the current chat", style="green")
         console.print("/chat delete - Delete the current chat", style="green")
         console.print("/chat new <chat_name> - Create a new chat", style="green")
@@ -1012,6 +1031,7 @@ class CommandHandler:
         console.print("/show length - Display the total conversation tokens", style="green")
         console.print("/show context - Display the context of the last query", style="green")
         console.print("/switch - Switch to a different provider or model", style="green")
+        console.print("/markdown true|false - Enable or disable markdown formatting", style="green")
         console.print("/help - Display this help message", style="green")
         console.print("/exit - Exit the program", style="green")
 
@@ -1715,26 +1735,33 @@ class ChatApp:
                             if isinstance(result, ChatProvider):
                                 self.current_session = result
                     elif user_input:
-                        # Handle both streaming and non-streaming responses
+                        use_markdown = self.current_session.parameters.get("use_markdown", True)
                         complete_response = ""
                         async for chunk in self.current_session.send_message(user_input):
                             if isinstance(chunk, str):
-                                complete_response += chunk
+                                if use_markdown:
+                                    complete_response += chunk
+                                else:
+                                    console.print(chunk, end="", style="yellow")
                             elif chunk is None:
                                 # End of streaming
                                 break
                         
-                        # Format and display the complete response
-                        formatted_response, self.code_blocks = format_code_blocks(complete_response)
-                        for line in formatted_response:
-                            if isinstance(line, Panel):
-                                console.print(line)
-                            elif isinstance(line, str):
-                                console.print(Markdown(line), style="yellow")
-                            else:
-                                console.print(str(line), style="yellow")
-                        
+                        if use_markdown:
+                            # Format and display the complete response
+                            formatted_response, self.code_blocks = format_code_blocks(complete_response)
+                            for line in formatted_response:
+                                if isinstance(line, Panel):
+                                    console.print(line)
+                                elif isinstance(line, str):
+                                    console.print(Markdown(line), style="yellow")
+                                else:
+                                    console.print(str(line), style="yellow")
+                        else:
+                            console.print("")  # Add an empty print to create a new line after streaming
+
                         self.current_session.save_history()
+
                 except KeyboardInterrupt:
                     continue
                 except EOFError:
