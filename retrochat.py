@@ -645,31 +645,30 @@ class GoogleChatSession(ChatProvider):
                     self.chat.send_message,
                     message,
                     generation_config=generation_config,
-                    stream=False  # Changed to False as the API doesn't support streaming
+                    stream=False  # Google API doesn't support streaming
                 )
 
             complete_message = response.text
             formatted_message = self.format_message(complete_message)
             self.add_to_history("assistant", formatted_message)
             
+            # Simulate streaming by yielding chunks
+            chunk_size = 4  # Adjust this value to control the streaming speed
+            for i in range(0, len(complete_message), chunk_size):
+                yield complete_message[i:i+chunk_size]
+                await asyncio.sleep(0.01)  # Add a small delay between chunks
+            
             if self.parameters.get("verbose", False):
                 tokens = self.calculate_tokens(formatted_message)
                 total_tokens = self.calculate_total_tokens()
-                console.print(f"Response tokens: {tokens}", style="cyan")
+                console.print(f"\nResponse tokens: {tokens}", style="cyan")
                 console.print(f"Total conversation tokens: {total_tokens}", style="cyan")
             
-            yield formatted_message  # Yield the formatted message
+            yield None  # Signal end of streaming
         except Exception as e:
             error_message = f"Error in Google API: {str(e)}"
             console.print(error_message, style="bold red")
             yield error_message
-
-    async def _async_iterator(self, sync_iterator):
-        while True:
-            try:
-                yield await asyncio.to_thread(next, sync_iterator)
-            except StopIteration:
-                break
 
     def set_system_message(self, message: str):
         super().set_system_message(message)
@@ -904,7 +903,17 @@ class CommandHandler:
     async def handle_command(self, command: str, session: ChatProvider):
         cmd_parts = command.split(maxsplit=2)
         cmd, *args = cmd_parts + ['', '']
-        if cmd == '/chat':
+        if cmd == '/copy':
+            try:
+                block_num = int(args[0])
+                if 1 <= block_num <= len(self.code_blocks):
+                    copy_code_to_clipboard(self.code_blocks[block_num - 1])
+                    console.print(f"Code block {block_num} copied to clipboard.", style="green")
+                else:
+                    console.print(f"Invalid code block number. Available blocks: 1-{len(self.code_blocks)}", style="bold red")
+            except ValueError:
+                console.print("Invalid block number. Please use a number.", style="bold red")
+        elif cmd == '/chat':
             method_name = f"handle_{args[0]}"
             method = getattr(self, method_name, None)
             if method:
@@ -971,8 +980,6 @@ class CommandHandler:
     async def handle_reset(self, _, session: ChatProvider):
         self.history_manager.clear_history()
         session.chat_history = []
-        self.code_blocks = []  # Clear code blocks
-        reset_code_block_count()  # Reset the code block counter
         console.print("Chat history has been reset.", style="cyan")
 
     async def handle_list(self, _, session: ChatProvider):
@@ -1166,8 +1173,6 @@ class CodeBlockFormatter:
         self.total_blocks = 0
 
     def format_code_blocks(self, text):
-        if not isinstance(text, str):
-            text = str(text)
         lines = text.split('\n')
         formatted_lines = []
         code_blocks = []
@@ -1178,25 +1183,36 @@ class CodeBlockFormatter:
         for line in lines:
             if line.startswith('```'):
                 if in_code_block:
-                    # End of code block
-                    code = '\n'.join(code_block)
-                    syntax = Syntax(code, language, theme="monokai", line_numbers=True)
-                    panel = Panel(syntax, border_style="bold", expand=False)
-                    formatted_lines.append(panel)
-                    self.total_blocks += 1
-                    formatted_lines.append(f'Code Block {self.total_blocks}')
-                    code_blocks.append(code)
+                    # Close the current code block
+                    if code_block:
+                        code = '\n'.join(code_block)
+                        self.total_blocks += 1
+                        syntax = Syntax(code, language, theme="monokai", line_numbers=True)
+                        panel = Panel(syntax, border_style="bold", expand=False)
+                        formatted_lines.append(panel)
+                        formatted_lines.append(f'Code Block {self.total_blocks}')
+                        code_blocks.append(code)
                     in_code_block = False
                     code_block = []
                     language = ''
                 else:
-                    # Start of code block
+                    # Start a new code block
                     in_code_block = True
                     language = line[3:].strip() or 'text'
             elif in_code_block:
                 code_block.append(line)
             else:
                 formatted_lines.append(line)
+
+        # Handle any open code block at the end
+        if in_code_block and code_block:
+            code = '\n'.join(code_block)
+            self.total_blocks += 1
+            syntax = Syntax(code, language, theme="monokai", line_numbers=True)
+            panel = Panel(syntax, border_style="bold", expand=False)
+            formatted_lines.append(panel)
+            formatted_lines.append(f'Code Block {self.total_blocks}')
+            code_blocks.append(code)
 
         return formatted_lines, code_blocks
 
@@ -1207,17 +1223,42 @@ class CodeBlockFormatter:
 formatter = CodeBlockFormatter()
 
 def format_code_blocks(text):
-    return formatter.format_code_blocks(text)
+    lines = text.split('\n')
+    formatted_lines = []
+    code_blocks = []
+    in_code_block = False
+    code_block = []
+    language = ''
 
-def reset_code_block_count():
-    formatter.reset()
+    for line in lines:
+        if line.startswith('```'):
+            if in_code_block:
+                # End of code block
+                code = '\n'.join(code_block)
+                syntax = Syntax(code, language, theme="monokai", line_numbers=True)
+                panel = Panel(syntax, border_style="bold", expand=False)
+                formatted_lines.append(panel)
+                formatted_lines.append(f'Code Block {len(code_blocks) + 1}')
+                code_blocks.append(code)
+                in_code_block = False
+                code_block = []
+                language = ''
+            else:
+                # Start of code block
+                in_code_block = True
+                language = line[3:].strip() or 'text'
+        elif in_code_block:
+            code_block.append(line)
+        else:
+            formatted_lines.append(line)
+
+    return formatted_lines, code_blocks
 
 def copy_code_to_clipboard(code):
     try:
         if isinstance(code, list):
             code = '\n'.join(code)  # Join list elements into a single string
         pyperclip.copy(code)
-        console.print("Code copied to clipboard!", style="green")
     except Exception as e:
         console.print(f"Failed to copy code to clipboard: {e}", style="bold red")
 
@@ -1234,6 +1275,8 @@ class ChatApp:
         self.last_model = None
         self.document_manager = DocumentManager()
         self.code_blocks = []
+        self.code_block_formatter = CodeBlockFormatter()  # Instantiate CodeBlockFormatter here
+
 
         self.check_and_fix_env_file()
         self.load_env_variables()
@@ -1650,7 +1693,7 @@ class ChatApp:
                     console.print(Markdown(line), style="yellow")
                 else:
                     console.print(str(line), style="yellow")
-            
+
             self.current_session.save_history()
         except Exception as e:
             console.print(f"An error occurred while processing the response: {str(e)}", style="bold red")
@@ -1702,6 +1745,7 @@ class ChatApp:
             console.print(f"Current model: [blue]{model_name}[/blue]", style="cyan")
 
             self.code_blocks = []
+            self.code_block_formatter.reset()
 
             while True:
                 try:
@@ -1710,24 +1754,15 @@ class ChatApp:
                     if user_input.lower() == '/exit':
                         console.print("Thank you for chatting. Goodbye!", style="cyan")
                         break
-                    elif user_input.startswith('/load '):
-                        folder_name = user_input.split(' ', 1)[1]
-                        await self.handle_load_command(folder_name)
-                    elif user_input.startswith('@'):
-                        parts = user_input[1:].split(' ', 1)
-                        if len(parts) == 2:
-                            folder_name, query = parts
-                            await self.handle_query_command(folder_name, query)
-                        else:
-                            console.print("Invalid query format. Use @<foldername> <question>", style="bold red")
                     elif user_input.startswith('/'):
                         if user_input.startswith('/copy '):
                             try:
                                 block_num = int(user_input.split(' ')[1])
-                                if 0 <= block_num < len(self.code_blocks):
-                                    copy_code_to_clipboard(self.code_blocks[block_num])
+                                if 1 <= block_num <= len(self.code_blocks):
+                                    copy_code_to_clipboard(self.code_blocks[block_num - 1])
+                                    console.print(f"Code block {block_num} copied to clipboard.", style="green")
                                 else:
-                                    console.print(f"Invalid code block number. Available blocks: 0-{len(self.code_blocks)-1}", style="bold red")
+                                    console.print(f"Invalid code block number. Available blocks: 1-{len(self.code_blocks)}", style="bold red")
                             except ValueError:
                                 console.print("Invalid block number. Please use a number.", style="bold red")
                         else:
@@ -1749,7 +1784,8 @@ class ChatApp:
                         
                         if use_markdown:
                             # Format and display the complete response
-                            formatted_response, self.code_blocks = format_code_blocks(complete_response)
+                            formatted_response, new_code_blocks = self.code_block_formatter.format_code_blocks(complete_response)
+                            self.code_blocks.extend(new_code_blocks)  # Add new code blocks to the existing list
                             for line in formatted_response:
                                 if isinstance(line, Panel):
                                     console.print(line)
