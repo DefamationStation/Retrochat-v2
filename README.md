@@ -22,7 +22,7 @@ ATTENTION: RAG only works with nomic-embed-text currently, all you need to do is
 - **Token Counting**: Display token usage for messages and entire conversations.
 - **Document Loading and Querying**: Load documents from local folders and query them using AI models.
 
-## Installation
+### Installation
 
 To run RetroChat, you need Python 3.11 or higher installed on your system. [Link to Python 3.12 from the MS store.](https://apps.microsoft.com/detail/9ncvdn91xzqp?hl=en-US&gl=US) Follow these steps to set up the environment:
 
