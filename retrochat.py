@@ -53,6 +53,7 @@ class Config:
     ANTHROPIC_API_KEY_NAME = "ANTHROPIC_API_KEY"
     OPENAI_API_KEY_NAME = "OPENAI_API_KEY"
     GOOGLE_API_KEY_NAME = "GOOGLE_API_KEY"
+    OPENROUTER_API_KEY_NAME = "OPENROUTER_API_KEY"
     LAST_CHAT_NAME_KEY = "LAST_CHAT_NAME"
     OLLAMA_IP_KEY = "OLLAMA_IP"
     OLLAMA_PORT_KEY = "OLLAMA_PORT"
@@ -383,45 +384,20 @@ class ChatProvider(ABC):
         for msg in self.chat_history:
             total_tokens += self.calculate_tokens(msg.content)
         return total_tokens
-
-class OllamaChatSession(ChatProvider):
-    def __init__(self, model_url: str, model: str, history_manager: ChatHistoryManager):
+    
+class OpenRouterChatSession(ChatProvider):
+    def __init__(self, api_key: str, model: str, history_manager: ChatHistoryManager):
         super().__init__(history_manager)
-        self.model_url = model_url
+        self.api_key = api_key
         self.model = model
         self.default_parameters.update({
-            "num_predict": 128,
-            "top_k": 40,
-            "top_p": 0.95,
-            "repeat_penalty": 1.1,
-            "repeat_last_n": 64,
-            "num_ctx": 8192,
-            "stop": None,
+            "top_p": 1,
+            "temperature": 1,
+            "frequency_penalty": 0,
+            "presence_penalty": 0,
+            "repetition_penalty": 1,
+            "top_k": 0,
         })
-    
-    def set_parameter(self, param: str, value: Any):
-        if param in self.default_parameters or param in ["repeat_penalty", "frequency_penalty"]:
-            if param in ["num_predict", "top_k", "repeat_last_n", "num_ctx"]:
-                value = int(value)
-            elif param in ["top_p", "temperature", "repeat_penalty", "frequency_penalty"]:
-                value = float(value)
-            elif param == "stop":
-                value = value.split() if isinstance(value, str) else value
-            elif param == "verbose":
-                value = str(value).lower() == "true"
-            
-            if param in ["repeat_penalty", "frequency_penalty"]:
-                self.parameters["repeat_penalty"] = value
-                self.parameters["frequency_penalty"] = value
-            else:
-                self.parameters[param] = value
-            
-            self.history_manager.save_parameters(self.parameters)
-            
-            if param != "verbose" or value:
-                console.print(f"Parameter '{param}' set to {value}", style="cyan")
-        else:
-            console.print(f"Invalid parameter: {param}", style="bold red")
 
     async def send_message(self, message: str):
         self.add_to_history("user", message)
@@ -434,21 +410,34 @@ class OllamaChatSession(ChatProvider):
             "model": self.model,
             "messages": messages,
             "stream": True,
-            "options": {k: v for k, v in self.parameters.items() if v is not None}
+            **{k: v for k, v in self.parameters.items() if v is not None}
+        }
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+            "X-Title": "Retrochat-v2",
         }
 
         async with aiohttp.ClientSession() as session:
-            async with session.post(self.model_url, json=data) as response:
+            async with session.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data) as response:
                 if response.status == 200:
                     complete_message = ""
                     async for line in response.content:
                         if line:
-                            response_json = json.loads(line)
-                            message_content = response_json.get('message', {}).get('content', '')
-                            complete_message += message_content
-                            yield message_content  # Yield each chunk for streaming
-                            if response_json.get('done', False):
-                                break
+                            line = line.decode('utf-8').strip()
+                            if line.startswith("data: "):
+                                if line == "data: [DONE]":
+                                    break
+                                json_str = line[6:]
+                                try:
+                                    response_json = json.loads(json_str)
+                                    content = response_json['choices'][0]['delta'].get('content', '')
+                                    if content:
+                                        complete_message += content
+                                        yield content
+                                except json.JSONDecodeError:
+                                    continue
                     
                     formatted_message = self.format_message(complete_message)
                     self.add_to_history("assistant", formatted_message)
@@ -458,8 +447,9 @@ class OllamaChatSession(ChatProvider):
                         total_tokens = self.calculate_total_tokens()
                         console.print(f"Response tokens: {tokens}", style="cyan")
                         console.print(f"Total conversation tokens: {total_tokens}", style="cyan")
-
-                    yield formatted_message
+                    
+                    yield None  # Signal end of streaming
+                    yield formatted_message  # Yield the formatted message as the last item
                 else:
                     error_message = f"Error: {response.status} - {await response.text()}"
                     console.print(error_message, style="bold red")
@@ -796,7 +786,8 @@ class ChatProviderFactory:
             'Ollama': OllamaChatSession,
             'Anthropic': AnthropicChatSession,
             'OpenAI': OpenAIChatSession,
-            'Google': GoogleChatSession
+            'Google': GoogleChatSession,
+            'OpenRouter': OpenRouterChatSession
         }
         provider_class = providers.get(provider_type)
         if provider_class:
@@ -1142,6 +1133,7 @@ class ChatApp:
             Config.ANTHROPIC_API_KEY_NAME,
             Config.OPENAI_API_KEY_NAME,
             Config.GOOGLE_API_KEY_NAME,
+            Config.OPENROUTER_API_KEY_NAME,
             Config.LAST_CHAT_NAME_KEY,
             Config.OLLAMA_IP_KEY,
             Config.OLLAMA_PORT_KEY,
@@ -1219,6 +1211,16 @@ class ChatApp:
                 console.print(f"No API key provided. {key_name.replace('_', ' ').title()} mode cannot be used.", style="bold red")
                 return False
         return True
+    
+    async def select_openrouter_model(self) -> str:
+        models = [
+            "meta-llama/llama-3.1-8b-instruct:free",
+        ]
+        console.print("Available OpenRouter models:", style="cyan")
+        for idx, model in enumerate(models):
+            console.print(f"{idx + 1}. {model}", style="green")
+        choice = console.ask("Select a model number")
+        return models[int(choice) - 1]
 
     def ensure_ollama_connection(self):
         ollama_ip = EnvManager.get_env_variable(Config.OLLAMA_IP_KEY, 'localhost')
@@ -1353,7 +1355,7 @@ class ChatApp:
         session.display_history()
 
     async def switch_provider(self):
-        console.print("Select provider:\n1. Ollama\n2. Anthropic\n3. OpenAI\n4. Google", style="cyan")
+        console.print("Select provider:\n1. Ollama\n2. Anthropic\n3. OpenAI\n4. Google\n5. OpenRouter", style="cyan")
         mode = console.ask("Enter your choice")
 
         if mode == '1':
@@ -1394,8 +1396,16 @@ class ChatApp:
             with SuppressLogging():
                 new_session = self.provider_factory.create_provider('Google', EnvManager.get_env_variable(Config.GOOGLE_API_KEY_NAME), selected_model, self.history_manager)
             provider = 'Google'
+        elif mode == '5':
+            if not self.ensure_api_key('openrouter_api_key', Config.OPENROUTER_API_KEY_NAME):  # Add Config. here
+                return None
+            selected_model = await self.select_openrouter_model()
+            if not selected_model:
+                return None
+            new_session = self.provider_factory.create_provider('OpenRouter', EnvManager.get_env_variable(Config.OPENROUTER_API_KEY_NAME), selected_model, self.history_manager)  # Add Config. here
+            provider = 'OpenRouter'
         else:
-            console.print("Invalid choice. Please select 1, 2, 3, or 4.", style="bold red")
+            console.print("Invalid choice. Please select 1, 2, 3, 4, or 5.", style="bold red")
             return None
 
         if new_session:
@@ -1428,9 +1438,15 @@ class ChatApp:
         elif self.last_provider == 'OpenAI':
             if not self.ensure_api_key('openai_api_key', Config.OPENAI_API_KEY_NAME):
                 return None
+        elif self.last_provider == 'OpenRouter':
+            if not self.ensure_api_key('openrouter_api_key', Config.OPENROUTER_API_KEY_NAME):  # Add Config. here
+                return None
             with contextlib.redirect_stderr(io.StringIO()):
-                new_session = self.provider_factory.create_provider('OpenAI', EnvManager.get_env_variable(Config.OPENAI_API_KEY_NAME), "https://api.openai.com/v1/chat/completions", self.last_model, self.history_manager)
-
+                new_session = self.provider_factory.create_provider('OpenRouter', EnvManager.get_env_variable(Config.OPENROUTER_API_KEY_NAME), self.last_model, self.history_manager)
+            if new_session:
+                self.apply_saved_parameters(new_session)
+            return new_session
+        
         if new_session:
             self.apply_saved_parameters(new_session)
         return new_session
@@ -1511,7 +1527,7 @@ class ChatApp:
 
     async def start(self):
         try:
-            console.print("Welcome to Retrochat! [bold green]v1.1.1[/bold green]", style="bold green")
+            console.print("Welcome to Retrochat! [bold green]v1.1.2[/bold green]", style="bold green")
             
             self.check_and_setup()
             
@@ -1746,6 +1762,7 @@ class ChatApp:
                 f.write(f"{Config.ANTHROPIC_API_KEY_NAME}=\n")
                 f.write(f"{Config.OPENAI_API_KEY_NAME}=\n")
                 f.write(f"{Config.GOOGLE_API_KEY_NAME}=\n")
+                f.write(f"{Config.OPENROUTER_API_KEY_NAME}=\n")
                 f.write(f"{Config.LAST_CHAT_NAME_KEY}=default\n")
                 f.write(f"{Config.OLLAMA_IP_KEY}=localhost\n")
                 f.write(f"{Config.OLLAMA_PORT_KEY}=11434\n")
