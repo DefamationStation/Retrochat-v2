@@ -1673,7 +1673,6 @@ class ChatApp:
         self.last_query_prompt = prompt
 
         response_generator = self.current_session.send_message(prompt)
-        complete_response = ""
         
         try:
             complete_response = ""
