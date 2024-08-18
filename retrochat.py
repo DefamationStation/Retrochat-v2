@@ -1094,15 +1094,29 @@ class DocumentManager:
                 if os.path.isfile(file_path):
                     loader = self.get_loader_for_file(file_path)
                     if loader:
-                        documents.extend(loader.load())
+                        # Load the content of the file and combine into a single document
+                        loaded_docs = loader.load()
+                        if loaded_docs:
+                            combined_content = "\n".join([doc.page_content for doc in loaded_docs])
+                            combined_document = Document(page_content=combined_content, metadata={"source": filename})
+                            documents.append(combined_document)
+                            console.print(f"Loaded content from {filename} as a single document", style="green")
+                    else:
+                        console.print(f"No loader found for file: {filename}", style="yellow")
+                else:
+                    console.print(f"Skipping non-file: {filename}", style="yellow")
             
-            console.print(f"Loaded {len(documents)} documents", style="green")
+            if not documents:
+                console.print("No valid documents found to load.", style="bold red")
+                return False
+
+            console.print(f"Total documents loaded: {len(documents)}", style="green")
             
             chunks = self.split_documents(documents)
-            console.print(f"Split into {len(chunks)} chunks", style="green")
+            console.print(f"Documents split into {len(chunks)} chunks", style="green")
             
             self.add_to_chroma(chunks, folder_name)
-            console.print("Added chunks to Chroma database", style="green")
+            console.print("Chunks added to Chroma database", style="green")
             
             return True
         except Exception as e:
@@ -1130,7 +1144,9 @@ class DocumentManager:
             length_function=len,
             is_separator_regex=False,
         )
-        return text_splitter.split_documents(documents)
+        chunks = text_splitter.split_documents(documents)
+        console.print(f"Split {len(documents)} documents into {len(chunks)} chunks", style="green")
+        return chunks
 
     def add_to_chroma(self, chunks: List[Document], folder_name: str):
         db = Chroma(persist_directory=self.chroma_path, embedding_function=self.embedding_function)
@@ -1143,7 +1159,7 @@ class DocumentManager:
         new_chunks = [chunk for chunk in chunks_with_ids if chunk.metadata["id"] not in existing_ids]
 
         if new_chunks:
-            console.print(f"-> Adding new documents: {len(new_chunks)}", style="cyan")
+            console.print(f"-> Adding {len(new_chunks)} new chunks to the database", style="cyan")
             new_chunk_ids = [chunk.metadata["id"] for chunk in new_chunks]
             db.add_documents(new_chunks, ids=new_chunk_ids)
         else:
