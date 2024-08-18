@@ -102,11 +102,12 @@ class EnvManager:
     @staticmethod
     def load_env_variables():
         if os.path.exists(Config.ENV_FILE):
-            load_dotenv(Config.ENV_FILE)
+            load_dotenv(Config.ENV_FILE, override=True)
 
     @staticmethod
     def set_env_variable(key, value):
         set_key(Config.ENV_FILE, key, value)
+        load_dotenv(Config.ENV_FILE, override=True)
 
     @staticmethod
     def get_env_variable(key, default=None):
