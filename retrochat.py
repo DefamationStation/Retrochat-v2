@@ -1254,38 +1254,6 @@ class CodeBlockFormatter:
 # Usage
 formatter = CodeBlockFormatter()
 
-def format_code_blocks(text):
-    lines = text.split('\n')
-    formatted_lines = []
-    code_blocks = []
-    in_code_block = False
-    code_block = []
-    language = ''
-
-    for line in lines:
-        if line.startswith('```'):
-            if in_code_block:
-                # End of code block
-                code = '\n'.join(code_block)
-                syntax = Syntax(code, language, theme="monokai", line_numbers=True)
-                panel = Panel(syntax, border_style="bold", expand=False)
-                formatted_lines.append(panel)
-                formatted_lines.append(f'Code Block {len(code_blocks) + 1}')
-                code_blocks.append(code)
-                in_code_block = False
-                code_block = []
-                language = ''
-            else:
-                # Start of code block
-                in_code_block = True
-                language = line[3:].strip() or 'text'
-        elif in_code_block:
-            code_block.append(line)
-        else:
-            formatted_lines.append(line)
-
-    return formatted_lines, code_blocks
-
 def copy_code_to_clipboard(code):
     try:
         if isinstance(code, list):
@@ -1717,7 +1685,7 @@ class ChatApp:
                     break
             
             # Format and display the complete response
-            formatted_response, self.code_blocks = format_code_blocks(complete_response)
+            formatted_response, self.code_blocks = self.format_code_blocks(complete_response)
             for line in formatted_response:
                 if isinstance(line, Panel):
                     console.print(line)
