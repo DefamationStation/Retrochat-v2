@@ -283,6 +283,14 @@ class ChatProvider(ABC):
             "use_markdown": True,
         }
         self.tokenizer_manager = TokenizerManager()
+        self._initialize_parameters()
+
+    def _initialize_parameters(self):
+        # Ensure all default parameters are set in self.parameters
+        for key, value in self.default_parameters.items():
+            if key not in self.parameters:
+                self.parameters[key] = value
+        self.save_parameters()
 
     def load_history(self) -> List[ChatMessage]:
         try:
@@ -355,17 +363,22 @@ class ChatProvider(ABC):
             else:
                 self.parameters[param] = value
             
-            self.history_manager.save_parameters(self.parameters)
+            self.save_parameters()
 
             if param == "use_markdown":
                 value = str(value).lower() == "true"
+                self.parameters['use_markdown'] = value
+                self.save_parameters()
 
             if param != "verbose" or value:
                 console.print(f"Parameter '{param}' set to {value}", style="cyan")
                 if param == "max_tokens":
-                    console.print("(This will be sent as max_output_tokens to the Gemini API)", style="yellow")
+                    console.print("(This will be sent as max_output_tokens to the API)", style="yellow")
         else:
             console.print(f"Invalid parameter: {param}", style="bold red")
+
+    def save_parameters(self):
+        self.history_manager.save_parameters(self.parameters)
 
     def show_parameters(self):
         console.print("Current Parameters:", style="cyan")
