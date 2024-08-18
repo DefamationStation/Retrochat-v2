@@ -468,6 +468,7 @@ class AnthropicChatSession(ChatProvider):
         self.api_key = api_key
         self.model_url = model_url
         self.model = model
+        self.cache_next = False
 
     async def send_message(self, message: str):
         self.add_to_history("user", message)
@@ -496,6 +497,10 @@ class AnthropicChatSession(ChatProvider):
             "anthropic-version": "2023-06-01",
             "anthropic-beta": "max-tokens-3-5-sonnet-2024-07-15",
         }
+
+        if self.cache_next:
+            headers["anthropic-beta"] = "prompt-caching-2024-07-31"
+            self.cache_next = False
 
         async with aiohttp.ClientSession() as session:
             async with session.post(self.model_url, json=data, headers=headers) as response:
@@ -537,6 +542,10 @@ class AnthropicChatSession(ChatProvider):
             messages.pop()
         
         return messages
+
+    def set_cache_next(self):
+        self.cache_next = True
+        console.print("Next message will be sent with prompt caching enabled.", style="cyan")
 
 class OpenAIChatSession(ChatProvider):
     def __init__(self, api_key: str, base_url: str, model: str, history_manager: ChatHistoryManager):
@@ -622,13 +631,22 @@ class GoogleChatSession(ChatProvider):
             genai.configure(api_key=self.api_key, client_options=client_options)
             
             self.genai_model = genai.GenerativeModel(self.model)
-            self.chat = self.genai_model.start_chat(history=[])
+            self.chat = self.initialize_chat()
 
         self.default_parameters.update({
             "candidate_count": 1,
             "max_tokens": 8192,
             "temperature": 0.8,
         })
+
+    def initialize_chat(self):
+        history = []
+        if self.system_message:
+            history.append({"role": "user", "parts": ["System: " + self.system_message]})
+        for msg in self.chat_history:
+            role = "user" if msg.role in ["user", "system"] else "model"
+            history.append({"role": role, "parts": [msg.content]})
+        return self.genai_model.start_chat(history=history)
 
     async def send_message(self, message: str):
         self.add_to_history("user", message)
@@ -672,7 +690,11 @@ class GoogleChatSession(ChatProvider):
 
     def set_system_message(self, message: str):
         super().set_system_message(message)
-        self.chat = self.genai_model.start_chat(history=[{"role": "system", "parts": [message]}])
+        self.chat = self.initialize_chat()
+
+    def add_to_history(self, role: str, content: str):
+        super().add_to_history(role, content)
+        self.chat = self.initialize_chat()
 
     def set_parameter(self, param: str, value: Any):
         if param in self.default_parameters:
@@ -941,10 +963,18 @@ class CommandHandler:
             await self.chat_app.handle_show_context()
         elif cmd == '/switch':
             return await self.handle_switch(args[0], session)
+        elif cmd == '/cache':
+            self.handle_cache(session)
         elif cmd == '/help':
             self.display_help()
         else:
             console.print("Unknown command. Type /help for available commands.", style="bold red")
+
+    def handle_cache(self, session: ChatProvider):
+        if isinstance(session, AnthropicChatSession):
+            session.set_cache_next()
+        else:
+            console.print("The /cache command is only available for Anthropic provider.", style="bold red")
 
     def handle_set(self, param: str, value: str, session: ChatProvider):
         if not param:
@@ -1027,6 +1057,7 @@ class CommandHandler:
         console.print("/markdown true|false - Enable or disable markdown formatting", style="green")
         console.print("/load <folder name> - Load a folder of documents into RAG", style="green")
         console.print("@<folder name> <Your query> - Question your local documents")
+        console.print("/cache - Enable prompt caching for the next message (Anthropic only)", style="green")
         console.print("/set system <message> - Set the system message", style="green")
         console.print("/set - Show available parameters and their current values", style="green")
         console.print("/set <parameter> <value> - Set a parameter", style="green")
