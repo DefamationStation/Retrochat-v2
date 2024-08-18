@@ -1292,7 +1292,7 @@ class ChatApp:
         self.last_model = None
         self.document_manager = DocumentManager()
         self.code_blocks = []
-        self.code_block_formatter = CodeBlockFormatter()  # Instantiate CodeBlockFormatter here
+        self.code_block_formatter = CodeBlockFormatter()
 
 
         self.check_and_fix_env_file()
@@ -1701,7 +1701,7 @@ class ChatApp:
                     break
             
             # Format and display the complete response
-            formatted_response, self.code_blocks = self.format_code_blocks(complete_response)
+            formatted_response, self.code_blocks = self.code_block_formatter.format_code_blocks(complete_response)
             for line in formatted_response:
                 if isinstance(line, Panel):
                     console.print(line)
