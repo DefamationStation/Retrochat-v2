@@ -54,6 +54,7 @@ class Config:
     OPENAI_API_KEY_NAME = "OPENAI_API_KEY"
     GOOGLE_API_KEY_NAME = "GOOGLE_API_KEY"
     OPENROUTER_API_KEY_NAME = "OPENROUTER_API_KEY"
+    OPENROUTER_MODELS_KEY = "OPENROUTER_MODELS"
     LAST_CHAT_NAME_KEY = "LAST_CHAT_NAME"
     OLLAMA_IP_KEY = "OLLAMA_IP"
     OLLAMA_PORT_KEY = "OLLAMA_PORT"
@@ -419,6 +420,30 @@ class OpenRouterChatSession(ChatProvider):
             "repetition_penalty": 1,
             "top_k": 0,
         })
+
+    @classmethod
+    def get_available_models(cls):
+        default_model = "meta-llama/llama-3.1-8b-instruct:free"
+        env_models = EnvManager.get_env_variable(Config.OPENROUTER_MODELS_KEY, default_model)
+        return env_models.split(',')
+
+    @classmethod
+    def add_model(cls, model_name: str):
+        models = cls.get_available_models()
+        if model_name not in models:
+            models.append(model_name)
+            EnvManager.set_env_variable(Config.OPENROUTER_MODELS_KEY, ','.join(models))
+            return True
+        return False
+
+    @classmethod
+    def remove_model(cls, model_name: str):
+        models = cls.get_available_models()
+        if model_name in models:
+            models.remove(model_name)
+            EnvManager.set_env_variable(Config.OPENROUTER_MODELS_KEY, ','.join(models))
+            return True
+        return False
 
     async def send_message(self, message: str):
         self.add_to_history("user", message)
@@ -971,6 +996,8 @@ class CommandHandler:
             except Exception as e:
                 console.print(f"An error occurred while editing the conversation: {str(e)}", style="bold red")
                 console.print("Your original conversation has not been modified.", style="yellow")
+        elif cmd == '/openrouter':
+            await self.handle_openrouter_command(command)
         elif cmd == '/show' and args[0] == 'length':
             await self.handle_show_length(session)
         elif cmd == '/show' and args[0] == 'context':
@@ -989,6 +1016,23 @@ class CommandHandler:
             session.set_cache_next()
         else:
             console.print("The /cache command is only available for Anthropic provider.", style="bold red")
+
+    async def handle_openrouter_command(self, command: str):
+        cmd_parts = command.split(maxsplit=2)
+        action, model_name = cmd_parts[1], cmd_parts[2] if len(cmd_parts) > 2 else None
+
+        if action == "add" and model_name:
+            if OpenRouterChatSession.add_model(model_name):
+                console.print(f"Model '{model_name}' added to OpenRouter models.", style="green")
+            else:
+                console.print(f"Model '{model_name}' already exists in OpenRouter models.", style="yellow")
+        elif action == "rm" and model_name:
+            if OpenRouterChatSession.remove_model(model_name):
+                console.print(f"Model '{model_name}' removed from OpenRouter models.", style="green")
+            else:
+                console.print(f"Model '{model_name}' not found in OpenRouter models.", style="yellow")
+        else:
+            console.print("Invalid OpenRouter command. Use '/openrouter add <model_name>' or '/openrouter rm <model_name>'.", style="bold red")
 
     def handle_set(self, param: str, value: str, session: ChatProvider):
         if not param:
@@ -1067,6 +1111,7 @@ class CommandHandler:
 
     def display_help(self):
         console.print("Available commands:", style="cyan")
+        console.print("/openrouter add|rm <model_name> - Add or remove an OpenRouter model", style="green")
         console.print("/copy <code block number> for example '/copy 0' to copy an entire code block.")
         console.print("/markdown true|false - Enable or disable markdown formatting", style="green")
         console.print("/load <folder name> - Load a folder of documents into RAG", style="green")
@@ -1397,9 +1442,7 @@ class ChatApp:
         return True
     
     async def select_openrouter_model(self) -> str:
-        models = [
-            "meta-llama/llama-3.1-8b-instruct:free",
-        ]
+        models = OpenRouterChatSession.get_available_models()
         console.print("Available OpenRouter models:", style="cyan")
         for idx, model in enumerate(models):
             console.print(f"{idx + 1}. {model}", style="green")
