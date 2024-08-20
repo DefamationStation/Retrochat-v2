@@ -3,7 +3,8 @@
 ![RetroChat Screenshot](https://i.imgur.com/5hh7cVb.png)
 RetroChat is a powerful command-line interface for interacting with various AI language models. It provides a seamless experience for engaging with different chat providers while offering robust features for managing and customizing your conversations.
 
-#You can now add any custom model you want through OpenRouter using "/openrouter add <modelname>"
+## You can now add any custom model you want through OpenRouter using '/openrouter add' 
+
 ATTENTION: RAG only works with nomic-embed-text currently, all you need to do is have it on Ollama.
 
 1. Create a folder in user/.retrochat and put all your files in it.
