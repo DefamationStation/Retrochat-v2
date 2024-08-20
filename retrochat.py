@@ -168,6 +168,12 @@ class ChatHistoryManager:
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY(session_id) REFERENCES chat_sessions(id)
                 );
+                CREATE TABLE IF NOT EXISTS code_blocks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id INTEGER,
+                    block_content TEXT NOT NULL,
+                    FOREIGN KEY(session_id) REFERENCES chat_sessions(id)
+                );
             ''')
 
     def _update_schema(self):
@@ -208,6 +214,27 @@ class ChatHistoryManager:
         except Exception as e:
             Logger.error(f"Error saving chat history: {e}")
 
+    def save_code_blocks(self, code_blocks: List[str]):
+        session_id = self._get_session_id(self.chat_name)
+        try:
+            with self.conn:
+                self.conn.execute('DELETE FROM code_blocks WHERE session_id = ?', (session_id,))
+                self.conn.executemany('''
+                    INSERT INTO code_blocks (session_id, block_content) VALUES (?, ?)
+                ''', [(session_id, block) for block in code_blocks])
+        except Exception as e:
+            Logger.error(f"Error saving code blocks: {e}")
+
+    def load_code_blocks(self) -> List[str]:
+        session_id = self._get_session_id(self.chat_name)
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT block_content FROM code_blocks WHERE session_id = ? ORDER BY id', (session_id,))
+        try:
+            return [row[0] for row in cursor.fetchall()]
+        except Exception as e:
+            Logger.error(f"Error loading code blocks: {e}")
+            return []
+        
     def load_history(self) -> List[ChatMessage]:
         session_id = self._get_session_id(self.chat_name)
         cursor = self.conn.cursor()
@@ -275,6 +302,7 @@ class ChatProvider(ABC):
         self.chat_history = self.load_history()
         self.system_message = self.history_manager.load_system_message()
         self.parameters = self.history_manager.load_parameters()
+        self.code_block_formatter = CodeBlockFormatter()
         self.default_parameters = {
             "temperature": 0.8,
             "max_tokens": 8192,
@@ -329,7 +357,14 @@ class ChatProvider(ABC):
                     console.print(Markdown(entry.content), style="green")
                 else:
                     formatted_content = self.format_message(entry.content)
-                    console.print(Markdown(formatted_content), style="yellow")
+                    formatted_response, code_blocks = self.code_block_formatter.format_code_blocks(formatted_content)
+                    for line in formatted_response:
+                        if isinstance(line, Panel):
+                            console.print(line)
+                        elif isinstance(line, str):
+                            console.print(Markdown(line), style="yellow")
+                        else:
+                            console.print(str(line), style="yellow")
 
     def set_system_message(self, message: str):
         self.system_message = message
@@ -960,18 +995,18 @@ class CommandHandler:
     async def handle_show_length(self, session: ChatProvider):
         total_tokens = session.calculate_total_tokens()
         console.print(f"Total conversation tokens: {total_tokens}", style="cyan")
-
+    
     async def handle_command(self, command: str, session: ChatProvider):
         cmd_parts = command.split(maxsplit=2)
         cmd, *args = cmd_parts + ['', '']
         if cmd == '/copy':
             try:
                 block_num = int(args[0])
-                if 1 <= block_num <= len(self.code_blocks):
-                    copy_code_to_clipboard(self.code_blocks[block_num - 1])
+                if 1 <= block_num <= len(self.chat_app.code_blocks):
+                    copy_code_to_clipboard(self.chat_app.code_blocks[block_num - 1])
                     console.print(f"Code block {block_num} copied to clipboard.", style="green")
                 else:
-                    console.print(f"Invalid code block number. Available blocks: 1-{len(self.code_blocks)}", style="bold red")
+                    console.print(f"Invalid code block number. Available blocks: 1-{len(self.chat_app.code_blocks)}", style="bold red")
             except ValueError:
                 console.print("Invalid block number. Please use a number.", style="bold red")
         elif cmd == '/chat':
@@ -1386,6 +1421,30 @@ class ChatApp:
                     f.write(f"{key}=\n")
             console.print(".env file updated.", style="green")
 
+    def process_chat_history_for_code_blocks(self):
+        self.code_blocks = []
+        self.code_block_formatter.reset()
+        if self.current_session and self.current_session.chat_history:
+            for message in self.current_session.chat_history:
+                if message.role == "assistant":
+                    _, new_code_blocks = self.code_block_formatter.format_code_blocks(message.content)
+                    self.code_blocks.extend(new_code_blocks)
+        console.print(f"Loaded {len(self.code_blocks)} code blocks from history.", style="cyan")
+
+    def display_chat_history(self):
+        for message in self.current_session.chat_history:
+            if message.role == "user":
+                console.print(Markdown(message.content), style="green")
+            else:
+                formatted_content, _ = self.code_block_formatter.format_code_blocks(message.content)
+                for line in formatted_content:
+                    if isinstance(line, Panel):
+                        console.print(line)
+                    elif isinstance(line, str):
+                        console.print(Markdown(line), style="yellow")
+                    else:
+                        console.print(str(line), style="yellow")
+
     def load_env_variables(self):
         EnvManager.load_env_variables()
         self.chat_name = EnvManager.get_env_variable(Config.LAST_CHAT_NAME_KEY, 'default')
@@ -1417,6 +1476,8 @@ class ChatApp:
         chat_history = self.history_manager.load_history()
         system_message = self.history_manager.load_system_message()
         parameters = self.history_manager.load_parameters()
+        if self.current_session:
+            self.process_chat_history_for_code_blocks()
         return chat_history, system_message, parameters
     
     def display_update_message(self):
@@ -1578,6 +1639,7 @@ class ChatApp:
 
         session.chat_history = new_history
         session.save_history()
+        self.process_chat_history_for_code_blocks()  # Add this line
         console.print("Chat history updated successfully.", style="cyan")
         session.display_history()
 
@@ -1709,7 +1771,7 @@ class ChatApp:
     def apply_saved_parameters(self, session):
         saved_params = self.history_manager.load_parameters()
         for param, value in saved_params.items():
-            session.parameters[param] = value
+            session.set_parameter(param, value)
         if self.current_session:
             session.chat_history = self.current_session.chat_history
             session.system_message = self.current_session.system_message
@@ -1792,7 +1854,7 @@ class ChatApp:
             self.display_update_message()
 
             self.current_session = await self.create_session_from_last()
-            
+        
             if not self.current_session:
                 self.current_session = await self.switch_provider()
             
@@ -1803,18 +1865,24 @@ class ChatApp:
             self.current_session.chat_history = chat_history
             self.current_session.system_message = system_message
             self.apply_saved_parameters(self.current_session)
-            
-            self.display_non_default_parameters()
+
+            # Process chat history for code blocks after setting up the session
+            self.process_chat_history_for_code_blocks()
+
+            self.code_block_formatter.reset()
 
             if not chat_history:
                 console.print("No previous chat history.", style="cyan")
             else:
-                self.current_session.display_history()
+                self.display_chat_history()
 
             provider_name = type(self.current_session).__name__.replace('ChatSession', '')
             model_name = getattr(self.current_session, 'model', 'Unknown')
             console.print(f"Current provider: [blue]{provider_name}[/blue]", style="cyan")
             console.print(f"Current model: [blue]{model_name}[/blue]", style="cyan")
+
+            # Display only non-default parameters
+            self.display_non_default_parameters()
 
             self.code_blocks = []
             self.code_block_formatter.reset()
@@ -1867,7 +1935,7 @@ class ChatApp:
                         if use_markdown:
                             # Format and display the complete response
                             formatted_response, new_code_blocks = self.code_block_formatter.format_code_blocks(complete_response)
-                            self.code_blocks.extend(new_code_blocks)  # Add new code blocks to the existing list
+                            self.code_blocks.extend(new_code_blocks)
                             for line in formatted_response:
                                 if isinstance(line, Panel):
                                     console.print(line)
@@ -1879,6 +1947,7 @@ class ChatApp:
                             console.print("")  # Add an empty print to create a new line after streaming
 
                         self.current_session.save_history()
+                        self.save_code_blocks()
 
                 except KeyboardInterrupt:
                     continue
@@ -1914,12 +1983,15 @@ class ChatApp:
             with patch_stdout():
                 user_input = await prompt_session.prompt_async(
                     "",  # No prompt message
-                    bottom_toolbar=None,  # No bottom toolbar message
-                    # Remove the is_password parameter
+                    bottom_toolbar=None,  # Remove the code blocks counter
                 )
             return user_input.strip()
         except (EOFError, KeyboardInterrupt):
             return ""
+        
+    # Add a method to save code blocks
+    def save_code_blocks(self):
+        self.history_manager.save_code_blocks(self.code_blocks)
     
     async def check_for_updates(self):
         repo_owner = "DefamationStation"
@@ -2066,17 +2138,12 @@ class ChatApp:
         console.print("Setup complete. You can now use the 'rchat' command from anywhere.", style="green")
 
     def display_non_default_parameters(self):
-        non_default_params = {}
         for param, value in self.current_session.parameters.items():
             if param in self.current_session.default_parameters:
                 if value != self.current_session.default_parameters[param]:
-                    non_default_params[param] = value
-            else:
-                non_default_params[param] = value
-        
-        if non_default_params:
-            for param, value in non_default_params.items():
-                console.print(f"{param}: {value}", style="green")
+                    console.print(f"Parameter '{param}' set to {value}", style="cyan")
+            elif param not in ['verbose', 'use_markdown']:  # Exclude these if they're not needed
+                console.print(f"Parameter '{param}' set to {value}", style="cyan")
 
 def get_missed_commits(repo_owner, repo_name, file_path, last_commit_hash):
     url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/commits?path={file_path}"
