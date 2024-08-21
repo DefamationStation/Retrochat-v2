@@ -12,7 +12,7 @@ ATTENTION: RAG only works with nomic-embed-text currently, all you need to do is
 ## Features
 
 - **Multi-Provider Support**: Choose between Ollama, Anthropic, and OpenAI, Google and OpenRouter.
-- **Custom model Support**: When using OpenRouter you can add your own custom models.
+- **Custom Model Support**: When using OpenRouter you can add your own custom models.
 - **Customizable Settings**: Fine-tune AI behavior with adjustable parameters for all providers.
 - **Conversation Editing**: Edit entire conversation history using your preferred text editor.
 - **Multi-line Input**: Enter complex queries or code snippets with ease.
