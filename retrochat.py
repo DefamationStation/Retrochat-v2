@@ -1573,7 +1573,7 @@ class ChatApp:
         return models[int(choice) - 1]
     
     async def select_google_model(self) -> str:
-        models = ["gemini-1.5-flash", "gemini-1.5-pro-exp-0801"]
+        models = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.5-pro-exp-0801"]
         console.print("Available Google Gemini models:", style="cyan")
         for idx, model in enumerate(models):
             console.print(f"{idx + 1}. {model}", style="green")
