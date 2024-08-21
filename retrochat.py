@@ -1429,7 +1429,6 @@ class ChatApp:
                 if message.role == "assistant":
                     _, new_code_blocks = self.code_block_formatter.format_code_blocks(message.content)
                     self.code_blocks.extend(new_code_blocks)
-        console.print(f"Loaded {len(self.code_blocks)} code blocks from history.", style="cyan")
 
     def display_chat_history(self):
         for message in self.current_session.chat_history:
@@ -1771,7 +1770,8 @@ class ChatApp:
     def apply_saved_parameters(self, session):
         saved_params = self.history_manager.load_parameters()
         for param, value in saved_params.items():
-            session.set_parameter(param, value)
+            if param in session.default_parameters and session.default_parameters[param] != value:
+                session.set_parameter(param, value)
         if self.current_session:
             session.chat_history = self.current_session.chat_history
             session.system_message = self.current_session.system_message
@@ -1880,9 +1880,6 @@ class ChatApp:
             model_name = getattr(self.current_session, 'model', 'Unknown')
             console.print(f"Current provider: [blue]{provider_name}[/blue]", style="cyan")
             console.print(f"Current model: [blue]{model_name}[/blue]", style="cyan")
-
-            # Display only non-default parameters
-            self.display_non_default_parameters()
 
             self.code_blocks = []
             self.code_block_formatter.reset()
@@ -2137,13 +2134,6 @@ class ChatApp:
 
         console.print("Setup complete. You can now use the 'rchat' command from anywhere.", style="green")
 
-    def display_non_default_parameters(self):
-        for param, value in self.current_session.parameters.items():
-            if param in self.current_session.default_parameters:
-                if value != self.current_session.default_parameters[param]:
-                    console.print(f"Parameter '{param}' set to {value}", style="cyan")
-            elif param not in ['verbose', 'use_markdown']:  # Exclude these if they're not needed
-                console.print(f"Parameter '{param}' set to {value}", style="cyan")
 
 def get_missed_commits(repo_owner, repo_name, file_path, last_commit_hash):
     url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/commits?path={file_path}"
