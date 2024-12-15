@@ -1553,7 +1553,7 @@ class ChatApp:
         return None
 
     async def select_anthropic_model(self) -> str:
-        models = ["claude-3-5-sonnet-20240620"]
+        models = ["claude-3-5-sonnet-20241022"]
         console.print("Available Anthropic models:", style="cyan")
         for idx, model in enumerate(models):
             console.print(f"{idx + 1}. {model}", style="green")
@@ -1565,7 +1565,7 @@ class ChatApp:
             return None
 
     async def select_openai_model(self) -> str:
-        models = ["gpt-4o-mini", "chatgpt-4o-latest", "gpt-4o", "gpt-4o-2024-08-06"]
+        models = ["gpt-4o-mini", "chatgpt-4o-latest", "gpt-4o", "o1-preview", "o1-mini"]
         console.print("Available OpenAI models:", style="cyan")
         for idx, model in enumerate(models):
             console.print(f"{idx + 1}. {model}", style="green")
@@ -1573,7 +1573,7 @@ class ChatApp:
         return models[int(choice) - 1]
     
     async def select_google_model(self) -> str:
-        models = ["gemini-1.5-flash", "gemini-1.5-flash-exp-0827", "gemini-1.5-flash-8b-exp-0827", "gemini-1.5-pro", "gemini-1.5-pro-exp-0827"]
+        models = ["gemini-2.0-flash-exp", "gemini-1.5-flash-8b"]
         console.print("Available Google Gemini models:", style="cyan")
         for idx, model in enumerate(models):
             console.print(f"{idx + 1}. {model}", style="green")
