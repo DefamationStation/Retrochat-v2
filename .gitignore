@@ -14,3 +14,5 @@ build/
 /rules
 __pycache__/test_retrochat.cpython-312-pytest-8.3.2.pyc
 .cursorignore
+/venv
+installed.txt
