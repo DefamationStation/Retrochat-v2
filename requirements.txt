@@ -6,6 +6,7 @@ langchain
 langchain-community
 langchain-core
 langchain-chroma
+langchain-ollama
 langchain-text-splitters
 prompt-toolkit
 pyperclip
