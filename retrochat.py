@@ -343,7 +343,11 @@ class ChatProvider(ABC):
 
     @abstractmethod
     async def send_message(self, message: str):
-        pass
+        """
+        Async generator that yields response chunks (str) from the provider.
+        Always yield at least one value, even in error cases.
+        """
+        yield NotImplementedError("send_message must be implemented by subclasses.")
 
     def add_to_history(self, role: str, content: str):
         self.chat_history.append(ChatMessage(role, content))
