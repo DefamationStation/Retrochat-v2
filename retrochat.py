@@ -1829,7 +1829,11 @@ class ChatApp:
 
         if self.current_session is not None:
             try:
-                complete_response = await self.current_session.send_message(prompt)
+                response_chunks = []
+                async for chunk in self.current_session.send_message(prompt):
+                    if chunk is not None:
+                        response_chunks.append(chunk)
+                complete_response = "".join(response_chunks)
                 formatted_response, self.code_blocks = self.code_block_formatter.format_code_blocks(complete_response)
                 for line in formatted_response:
                     if isinstance(line, Panel):
@@ -1932,7 +1936,11 @@ class ChatApp:
                     elif user_input:
                         use_markdown = self.current_session.parameters.get("use_markdown", True)
                         try:
-                            complete_response = await self.current_session.send_message(user_input)
+                            response_chunks = []
+                            async for chunk in self.current_session.send_message(user_input):
+                                if chunk is not None:
+                                    response_chunks.append(chunk)
+                            complete_response = "".join(response_chunks)
                         except Exception as e:
                             console.print(f"An error occurred while processing the response: {str(e)}", style="bold red")
                             continue
