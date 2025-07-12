@@ -17,9 +17,6 @@ import warnings
 import contextlib
 import io
 import pyperclip
-import os
-import aiohttp
-from google.api_core import client_options as client_options_lib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any, Union
@@ -40,6 +37,9 @@ from langchain_core.documents import Document
 from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_ollama import OllamaEmbeddings
 
+# Import configuration
+from config import Config
+
 class SuppressLogging:
     def __enter__(self):
         logging.disable(logging.CRITICAL)
@@ -47,28 +47,7 @@ class SuppressLogging:
     def __exit__(self, exit_type, exit_value, exit_traceback):
         logging.disable(logging.NOTSET)
 
-class Config:
-    USER_HOME = os.path.expanduser('~')
-    RETROCHAT_DIR = os.path.join(USER_HOME, '.retrochat')
-    ENV_FILE = os.path.join(RETROCHAT_DIR, '.env')
-    DB_FILE = os.path.join(RETROCHAT_DIR, 'chat_history.db')
-    SETTINGS_FILE = os.path.join(RETROCHAT_DIR, 'settings.json')
-    ANTHROPIC_API_KEY_NAME = "ANTHROPIC_API_KEY"
-    OPENAI_API_KEY_NAME = "OPENAI_API_KEY"
-    GOOGLE_API_KEY_NAME = "GOOGLE_API_KEY"
-    OPENROUTER_API_KEY_NAME = "OPENROUTER_API_KEY"
-    OPENROUTER_MODELS_KEY = "OPENROUTER_MODELS"
-    LAST_CHAT_NAME_KEY = "LAST_CHAT_NAME"
-    OLLAMA_IP_KEY = "OLLAMA_IP"
-    OLLAMA_PORT_KEY = "OLLAMA_PORT"
-    RETROCHAT_SCRIPT = os.path.join(RETROCHAT_DIR, 'retrochat.py')
-    LAST_PROVIDER_KEY = "LAST_PROVIDER"
-    LAST_MODEL_KEY = "LAST_MODEL"
-    CHROMA_PATH = os.path.join(RETROCHAT_DIR, "chroma")
 
-    @classmethod
-    def initialize(cls):
-        os.makedirs(cls.RETROCHAT_DIR, exist_ok=True)
 
 class Logger:
     @staticmethod
