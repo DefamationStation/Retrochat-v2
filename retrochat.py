@@ -763,11 +763,23 @@ class ChatApp:
         current_script = sys.argv[0]
         shutil.copy2(current_script, Config.RETROCHAT_SCRIPT)
         console.print(f"Copied RetroChat script to {Config.RETROCHAT_SCRIPT}", style="cyan")
+
+        # Also copy rchat.ps1 to the .retrochat directory
+        rchat_ps1_src = os.path.join(os.path.dirname(current_script), "rchat.ps1")
+        rchat_ps1_dst = os.path.join(Config.RETROCHAT_DIR, "rchat.ps1")
+        if os.path.exists(rchat_ps1_src):
+            shutil.copy2(rchat_ps1_src, rchat_ps1_dst)
+            console.print(f"Copied rchat.ps1 to {rchat_ps1_dst}", style="cyan")
+        else:
+            console.print(f"Warning: rchat.ps1 not found at {rchat_ps1_src}. Batch launcher may not work.", style="yellow")
         
         if sys.platform.startswith('win'):
             rchat_bat_path = os.path.join(Config.RETROCHAT_DIR, "rchat.bat")
+            rchat_ps1_path = os.path.join(os.path.dirname(Config.RETROCHAT_SCRIPT), "rchat.ps1")
+            # The batch file will call the PowerShell script, passing all arguments
             with open(rchat_bat_path, "w") as f:
-                f.write(f'@echo off\npython "{Config.RETROCHAT_SCRIPT}" %*')
+                f.write(f"@echo off\n"
+                        f"powershell -ExecutionPolicy Bypass -File \"{rchat_ps1_path}\" %*\n")
             console.print(f"Created rchat.bat at {rchat_bat_path}", style="cyan")
         else:  # Mac or Linux
             rchat_sh_path = os.path.join(Config.RETROCHAT_DIR, "rchat")
