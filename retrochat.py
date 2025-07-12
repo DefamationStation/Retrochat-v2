@@ -37,7 +37,8 @@ from langchain_community.document_loaders import TextLoader, UnstructuredWordDoc
 from langchain_community.document_loaders.base import BaseLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
-from langchain_community.embeddings import SentenceTransformerEmbeddings, OllamaEmbeddings
+from langchain_community.embeddings import SentenceTransformerEmbeddings
+from langchain_ollama import OllamaEmbeddings
 
 class SuppressLogging:
     def __enter__(self):
