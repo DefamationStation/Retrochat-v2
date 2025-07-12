@@ -7,6 +7,7 @@ from .openai import OpenAIChatSession
 from .google import GoogleChatSession
 from .ollama import OllamaChatSession
 from .oobabooga import OobaboogaChatSession
+from .lmstudio import LMStudioChatSession
 from .factory import ChatProviderFactory
 
 __all__ = [
@@ -17,5 +18,6 @@ __all__ = [
     'GoogleChatSession',
     'OllamaChatSession',
     'OobaboogaChatSession',
+    'LMStudioChatSession',
     'ChatProviderFactory'
 ]
