@@ -17,6 +17,8 @@ import warnings
 import contextlib
 import io
 import pyperclip
+import os
+import aiohttp
 from google.api_core import client_options as client_options_lib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -144,6 +146,7 @@ class ChatMessage:
 
 class ChatHistoryManager:
     def __init__(self, db_file: str, chat_name: str = 'default'):
+        Config.initialize()  # Ensure the directory exists
         self.db_file = db_file
         self.chat_name = chat_name
         self.conn = sqlite3.connect(self.db_file)
@@ -198,7 +201,16 @@ class ChatHistoryManager:
         if session:
             return session[0]
         cursor.execute('INSERT INTO chat_sessions (chat_name) VALUES (?)', (chat_name,))
-        return cursor.lastrowid
+        session_id = cursor.lastrowid
+        if session_id is None:
+            # Fallback: fetch the id again
+            cursor.execute('SELECT id FROM chat_sessions WHERE chat_name = ?', (chat_name,))
+            session = cursor.fetchone()
+            if session:
+                return session[0]
+            else:
+                raise RuntimeError("Failed to create or retrieve chat session id.")
+        return session_id
 
     def set_chat_name(self, chat_name: str):
         self.chat_name = chat_name
@@ -460,7 +472,9 @@ class OpenRouterChatSession(ChatProvider):
     def get_available_models(cls):
         default_model = "meta-llama/llama-3.1-8b-instruct:free"
         env_models = EnvManager.get_env_variable(Config.OPENROUTER_MODELS_KEY, default_model)
-        return env_models.split(',')
+        if not env_models:
+            env_models = default_model
+        return str(env_models).split(',')
 
     @classmethod
     def add_model(cls, model_name: str):
@@ -698,13 +712,12 @@ class GoogleChatSession(ChatProvider):
         os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
         
         # Configure the Google AI library
+        import google.generativeai as genai
+        from google.generativeai.generative_models import GenerativeModel
+        from google.generativeai.types import GenerationConfig
+        os.environ["GOOGLE_API_KEY"] = self.api_key
         with SuppressLogging():
-            client_options = client_options_lib.ClientOptions(
-                api_endpoint="generativelanguage.googleapis.com"
-            )
-            genai.configure(api_key=self.api_key, client_options=client_options)
-            
-            self.genai_model = genai.GenerativeModel(self.model)
+            self.genai_model = GenerativeModel(self.model)
             self.chat = self.initialize_chat()
 
         self.default_parameters.update({
@@ -725,7 +738,8 @@ class GoogleChatSession(ChatProvider):
     async def send_message(self, message: str):
         self.add_to_history("user", message)
         
-        generation_config = genai.types.GenerationConfig(
+        from google.generativeai.types import GenerationConfig
+        generation_config = GenerationConfig(
             candidate_count=self.parameters.get("candidate_count", 1),
             max_output_tokens=self.parameters.get("max_tokens", 8192),
             temperature=self.parameters.get("temperature", 0.8),
@@ -1217,7 +1231,7 @@ class DocumentManager:
             console.print(f"Error loading documents: {str(e)}", style="bold red")
             return False
 
-    def get_loader_for_file(self, file_path: str) -> BaseLoader:
+    def get_loader_for_file(self, file_path: str) -> Optional[BaseLoader]:
         _, ext = os.path.splitext(file_path.lower())
         if ext == '.pdf':
             return PyPDFDirectoryLoader(os.path.dirname(file_path))
@@ -1297,9 +1311,10 @@ class DocumentManager:
         results = db.similarity_search(
             query,
             k=min(5, len(folder_docs_ids)),
-            filter={"id": {"$in": folder_docs_ids}}
         )
-        return results
+        # Filter results to only those in folder_docs_ids
+        filtered_results = [doc for doc in results if getattr(doc, 'metadata', {}).get('id', '').startswith(f"{folder_name}/")]
+        return filtered_results
 
 def get_embedding_function():
     EnvManager.load_env_variables()
@@ -1431,27 +1446,31 @@ class ChatApp:
                     self.code_blocks.extend(new_code_blocks)
 
     def display_chat_history(self):
-        for message in self.current_session.chat_history:
-            if message.role == "user":
-                console.print(Markdown(message.content), style="green")
-            else:
-                formatted_content, _ = self.code_block_formatter.format_code_blocks(message.content)
-                for line in formatted_content:
-                    if isinstance(line, Panel):
-                        console.print(line)
-                    elif isinstance(line, str):
-                        console.print(Markdown(line), style="yellow")
-                    else:
-                        console.print(str(line), style="yellow")
+        if self.current_session and self.current_session.chat_history:
+            for message in self.current_session.chat_history:
+                if message.role == "user":
+                    console.print(Markdown(message.content), style="green")
+                else:
+                    formatted_content, _ = self.code_block_formatter.format_code_blocks(message.content)
+                    for line in formatted_content:
+                        if isinstance(line, Panel):
+                            console.print(line)
+                        elif isinstance(line, str):
+                            console.print(Markdown(line), style="yellow")
+                        else:
+                            console.print(str(line), style="yellow")
 
     def load_env_variables(self):
         EnvManager.load_env_variables()
         self.chat_name = EnvManager.get_env_variable(Config.LAST_CHAT_NAME_KEY, 'default')
         self.last_commit_hash = EnvManager.get_env_variable("LAST_COMMIT_HASH")
-        self.updated = EnvManager.get_env_variable("UPDATED", "false").lower() == "true"
+        self.updated = str(EnvManager.get_env_variable("UPDATED", "false")).lower() == "true"
         self.last_provider = EnvManager.get_env_variable(Config.LAST_PROVIDER_KEY)
         self.last_model = EnvManager.get_env_variable(Config.LAST_MODEL_KEY)
-        self.history_manager.set_chat_name(self.chat_name)
+        if self.chat_name is not None:
+            self.history_manager.set_chat_name(str(self.chat_name))
+        else:
+            self.history_manager.set_chat_name("default")
 
         # Debug print
         #console.print("Loaded environment variables:", style="cyan")
@@ -1471,7 +1490,7 @@ class ChatApp:
         self.last_model = model
 
     def load_last_chat(self):
-        self.history_manager.set_chat_name(self.chat_name)
+        self.history_manager.set_chat_name(self.chat_name if self.chat_name is not None else "default")
         chat_history = self.history_manager.load_history()
         system_message = self.history_manager.load_system_message()
         parameters = self.history_manager.load_parameters()
@@ -1501,7 +1520,7 @@ class ChatApp:
                 return False
         return True
     
-    async def select_openrouter_model(self) -> str:
+    async def select_openrouter_model(self) -> Optional[str]:
         models = OpenRouterChatSession.get_available_models()
         console.print("Available OpenRouter models:", style="cyan")
         for idx, model in enumerate(models):
@@ -1531,7 +1550,7 @@ class ChatApp:
             console.print(f"Ollama connection details updated and saved in the .env file.", style="cyan")
             return self.ensure_ollama_connection()
 
-    async def select_ollama_model(self) -> str:
+    async def select_ollama_model(self) -> Optional[str]:
         ollama_ip = EnvManager.get_env_variable(Config.OLLAMA_IP_KEY, 'localhost')
         ollama_port = EnvManager.get_env_variable(Config.OLLAMA_PORT_KEY, '11434')
         url = f"http://{ollama_ip}:{ollama_port}/api/tags"
@@ -1552,7 +1571,7 @@ class ChatApp:
                     console.print(f"Error fetching Ollama models: {response.status} - {await response.text()}", style="bold red")
         return None
 
-    async def select_anthropic_model(self) -> str:
+    async def select_anthropic_model(self) -> Optional[str]:
         models = ["claude-3-5-sonnet-20241022"]
         console.print("Available Anthropic models:", style="cyan")
         for idx, model in enumerate(models):
@@ -1564,7 +1583,7 @@ class ChatApp:
             console.print("Invalid selection. Please try again.", style="bold red")
             return None
 
-    async def select_openai_model(self) -> str:
+    async def select_openai_model(self) -> Optional[str]:
         models = ["gpt-4o-mini", "chatgpt-4o-latest", "gpt-4o", "o1-preview", "o1-mini"]
         console.print("Available OpenAI models:", style="cyan")
         for idx, model in enumerate(models):
@@ -1572,7 +1591,7 @@ class ChatApp:
         choice = console.ask("Select a model number")
         return models[int(choice) - 1]
     
-    async def select_google_model(self) -> str:
+    async def select_google_model(self) -> Optional[str]:
         models = ["gemini-2.0-flash-exp", "gemini-1.5-flash-8b"]
         console.print("Available Google Gemini models:", style="cyan")
         for idx, model in enumerate(models):
@@ -1710,7 +1729,7 @@ class ChatApp:
             return new_session
         return None
     
-    async def select_oobabooga_character(self) -> str:
+    async def select_oobabooga_character(self) -> Optional[str]:
         characters = ["Example", "Assistant", "Chatbot", "Custom"]  # Add more characters as needed
         console.print("Available Oobabooga characters:", style="cyan")
         for idx, character in enumerate(characters):
@@ -1723,6 +1742,7 @@ class ChatApp:
             return selected
         except (ValueError, IndexError):
             console.print("Invalid selection. Please try again.", style="bold red")
+            return None
 
     async def create_session_from_last(self):
         new_session = None
@@ -1792,9 +1812,8 @@ class ChatApp:
         if not results:
             console.print(f"No results found for query in folder '{folder_name}'", style="yellow")
             return
-        
+
         context = "\n\n".join([doc.page_content for doc in results])
-        
         prompt = f"""
         Based on the following context, answer the question: {query}
 
@@ -1807,30 +1826,23 @@ class ChatApp:
         self.last_query_context = context
         self.last_query_prompt = prompt
 
-        response_generator = self.current_session.send_message(prompt)
-        
-        try:
-            complete_response = ""
-            async for chunk in response_generator:
-                if isinstance(chunk, str):
-                    complete_response += chunk
-                elif chunk is None:
-                    # End of streaming
-                    break
-            
-            # Format and display the complete response
-            formatted_response, self.code_blocks = self.code_block_formatter.format_code_blocks(complete_response)
-            for line in formatted_response:
-                if isinstance(line, Panel):
-                    console.print(line)
-                elif isinstance(line, str):
-                    console.print(Markdown(line), style="yellow")
-                else:
-                    console.print(str(line), style="yellow")
-
-            self.current_session.save_history()
-        except Exception as e:
-            console.print(f"An error occurred while processing the response: {str(e)}", style="bold red")
+        if self.current_session is not None:
+            try:
+                complete_response = await self.current_session.send_message(prompt)
+                formatted_response, self.code_blocks = self.code_block_formatter.format_code_blocks(complete_response)
+                for line in formatted_response:
+                    if isinstance(line, Panel):
+                        console.print(line)
+                    elif isinstance(line, str):
+                        console.print(Markdown(line), style="yellow")
+                    else:
+                        console.print(str(line), style="yellow")
+                if hasattr(self.current_session, "save_history"):
+                    self.current_session.save_history()
+            except Exception as e:
+                console.print(f"An error occurred while processing the response: {str(e)}", style="bold red")
+        else:
+            console.print("No active session.", style="bold red")
     
     async def handle_show_context(self):
         if hasattr(self, 'last_query_context') and hasattr(self, 'last_query_prompt'):
@@ -1918,17 +1930,11 @@ class ChatApp:
                                 self.current_session = result
                     elif user_input:
                         use_markdown = self.current_session.parameters.get("use_markdown", True)
-                        complete_response = ""
-                        async for chunk in self.current_session.send_message(user_input):
-                            if isinstance(chunk, str):
-                                if use_markdown:
-                                    complete_response += chunk
-                                else:
-                                    console.print(chunk, end="", style="yellow")
-                            elif chunk is None:
-                                # End of streaming
-                                break
-                        
+                        try:
+                            complete_response = await self.current_session.send_message(user_input)
+                        except Exception as e:
+                            console.print(f"An error occurred while processing the response: {str(e)}", style="bold red")
+                            continue
                         if use_markdown:
                             # Format and display the complete response
                             formatted_response, new_code_blocks = self.code_block_formatter.format_code_blocks(complete_response)
@@ -2001,7 +2007,7 @@ class ChatApp:
         try:
             url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/commits?path={file_path}&page=1&per_page=1"
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=5) as response:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as response:
                     if response.status == 200:
                         latest_commit = (await response.json())[0]
                         latest_commit_hash = latest_commit['sha']
@@ -2013,7 +2019,7 @@ class ChatApp:
                         missed_commits = get_missed_commits(repo_owner, repo_name, file_path, last_commit_hash)
 
                         url = f"https://raw.githubusercontent.com/{repo_owner}/{repo_name}/{latest_commit_hash}/{file_path}"
-                        async with session.get(url, timeout=5) as response:
+                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as response:
                             if response.status == 200:
                                 latest_content = await response.text()
 
