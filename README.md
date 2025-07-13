@@ -1,31 +1,50 @@
 
-# RetroChat
+# RetroChat v2
 ![RetroChat Screenshot](https://i.imgur.com/5hh7cVb.png)
 RetroChat is a powerful command-line interface for interacting with various AI language models. It provides a seamless experience for engaging with different chat providers while offering robust features for managing and customizing your conversations.
 
-ATTENTION: RAG only works with nomic-embed-text currently, all you need to do is have it on Ollama.
+## 🚀 Quick Install
 
-1. Create a folder in user/.retrochat and put all your files in it.
-2. In the chat type /load <folder name> and you'll get a message if it's executed successfully.
-3. Then use @<folder name> to ask that specific folder's documents questions.
+**One command to rule them all:**
 
-## Features
+```powershell
+powershell -ExecutionPolicy Bypass -Command "iwr -useb https://raw.githubusercontent.com/DefamationStation/Retrochat-v2/main/install.ps1 | iex"
+```
 
-- **Multi-Provider Support**: Choose between Ollama, Anthropic, and OpenAI, Google and OpenRouter.
-- **Custom Model Support**: When using OpenRouter you can add your own custom models.
-- **Customizable Settings**: Fine-tune AI behavior with adjustable parameters for all providers.
-- **Conversation Editing**: Edit entire conversation history using your preferred text editor.
-- **Multi-line Input**: Enter complex queries or code snippets with ease.
-- **Command System**: Control various aspects of the chat and application with '/' prefixed commands.
-- **Local Setup**: Easy installation in your home directory for system-wide access.
-- **Auto-Update**: Check for and apply updates automatically.
-- **Provider Switching**: Easily switch between different AI providers and models during a session.
-- **Token Counting**: Display token usage for messages and entire conversations.
-- **Document Loading and Querying**: Load documents from local folders and query them using AI models.
+Then run `rchat` from anywhere! 🎉
 
-### Installation
+## ✨ Features
 
-To run RetroChat, you need Python 3.11 or higher installed on your system. [Link to Python 3.12 from the MS store.](https://apps.microsoft.com/detail/9ncvdn91xzqp?hl=en-US&gl=US) Follow these steps to set up the environment:
+- **🤖 Multi-Provider Support**: Ollama, Anthropic, OpenAI, Google, OpenRouter
+- **📝 Document RAG**: Load and query local documents (PDF, Word, Markdown, TXT)
+- **🔄 Auto-Updates**: Always get the latest features automatically
+- **⚙️ Customizable Settings**: Fine-tune AI behavior with adjustable parameters
+- **✏️ Conversation Editing**: Edit entire conversation history
+- **📋 Multi-line Input**: Enter complex queries with ease
+- **🎯 Command System**: Control everything with '/' prefixed commands
+- **🔢 Token Counting**: Track usage for messages and conversations
+- **🔀 Provider Switching**: Switch between AI providers mid-conversation
+
+## 📚 Document RAG System
+
+**ATTENTION**: RAG only works with `nomic-embed-text` on Ollama currently.
+
+1. Create a folder in `~/.retrochat/` and put your files in it
+2. Type `/load <folder_name>` to process documents
+3. Use `@<folder_name> <question>` to query documents
+
+## 🛠️ Installation
+
+### Automatic (Recommended)
+Run the installer command above. It handles everything automatically:
+- Downloads to `~/.retrochat/`
+- Sets up Python environment 
+- Installs dependencies
+- Creates global `rchat` command
+- Enables auto-updates
+
+### Manual Installation
+For development or manual setup:
 
 1. Download `retrochat.py` and the `requirements.txt` files and either run them from anywhere 
    or place them in the 'C:\Users\your username\\.retrochat' directory.

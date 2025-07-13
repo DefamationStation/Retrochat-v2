@@ -1,4 +1,3 @@
-aiohttp
 anthropic
 chromadb
 google-generativeai
