@@ -3,15 +3,34 @@
 ![RetroChat Screenshot](https://i.imgur.com/5hh7cVb.png)
 RetroChat is a powerful command-line interface for interacting with various AI language models. It provides a seamless experience for engaging with different chat providers while offering robust features for managing and customizing your conversations.
 
-## 🚀 Quick Install
+## 🚀 Installation
 
-**One command to rule them all:**
+**One installer for all platforms (Windows/Linux/macOS):**
 
-```powershell
+```bash
+# Windows (PowerShell)
 powershell -ExecutionPolicy Bypass -Command "iwr -useb https://raw.githubusercontent.com/DefamationStation/Retrochat-v2/main/install.ps1 | iex"
+
+# Linux/macOS
+curl -fsSL https://raw.githubusercontent.com/DefamationStation/Retrochat-v2/main/install.ps1 | pwsh -
 ```
 
 Then run `rchat` from anywhere! 🎉
+
+**What the installer does:**
+- Downloads to `~/.retrochat/`
+- Sets up Python environment 
+- Installs dependencies
+- Creates global `rchat` command
+- Enables auto-updates
+
+**Interactive installation:**
+```bash
+# Download first, then run with options
+./install.ps1 -Interactive
+./install.ps1 -Force
+./install.ps1 -CustomPath "C:\MyApps\RetroChat"
+```
 
 ## ✨ Features
 
@@ -33,22 +52,15 @@ Then run `rchat` from anywhere! 🎉
 2. Type `/load <folder_name>` to process documents
 3. Use `@<folder_name> <question>` to query documents
 
-## 🛠️ Installation
+## 🛠️ Manual Installation
 
-### Automatic (Recommended)
-Run the installer command above. It handles everything automatically:
-- Downloads to `~/.retrochat/`
-- Sets up Python environment 
-- Installs dependencies
-- Creates global `rchat` command
-- Enables auto-updates
+For development or custom setup:
 
-### Manual Installation
-For development or manual setup:
-
-1. Download `retrochat.py` and the `requirements.txt` files and either run them from anywhere 
-   or place them in the 'C:\Users\your username\\.retrochat' directory.
-2. Navigate to the project directory or right-click in the directory and select 'Open in Terminal'.
+1. Clone the repository: `git clone https://github.com/DefamationStation/Retrochat-v2.git`
+2. Create virtual environment: `python -m venv venv`
+3. Activate environment: `venv\Scripts\activate` (Windows) or `source venv/bin/activate` (Linux/macOS)
+4. Install dependencies: `pip install -r requirements.txt`
+5. Run: `python retrochat.py`
    ```
    cd C:\Users\<your username>\.retrochat
    ```
