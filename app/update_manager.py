@@ -30,6 +30,7 @@ class UpdateManager:
     def _check_if_installed(self) -> bool:
         """Check if we're running from the installed location in ~/.retrochat/"""
         expected_installed_path = os.path.join(Config.RETROCHAT_DIR, "source")
+        # update_manager.py is in app/ subdirectory, so go up one level to get to source/
         current_script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         return os.path.normpath(current_script_dir) == os.path.normpath(expected_installed_path)
 
