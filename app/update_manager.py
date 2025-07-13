@@ -84,7 +84,7 @@ class UpdateManager:
     async def check_for_updates(self) -> bool:
         """Check for updates and handle the update process."""
         try:
-            console.print("🔍 Checking for updates...", style="cyan")
+            console.print("[*] Checking for updates...", style="cyan")
             
             # Get remote commits
             remote_commits = await self.get_remote_commits(15)
@@ -112,11 +112,11 @@ class UpdateManager:
                 available_updates = remote_commits[:5]
 
             if not available_updates:
-                console.print("✅ RetroChat is up to date!", style="green")
+                console.print("[OK] RetroChat is up to date!", style="green")
                 return False
 
             # Display available updates
-            console.print(f"🔄 {len(available_updates)} update(s) available!", style="bold cyan")
+            console.print(f"[UPDATE] {len(available_updates)} update(s) available!", style="bold cyan")
             console.print("\nRecent changes:", style="cyan")
             
             for i, commit in enumerate(available_updates, 1):
@@ -142,7 +142,7 @@ class UpdateManager:
     async def perform_update(self) -> bool:
         """Perform the actual update."""
         try:
-            console.print("🔄 Updating RetroChat...", style="cyan")
+            console.print("[*] Updating RetroChat...", style="cyan")
             
             if self._has_git() and self._is_git_repo():
                 return await self._update_with_git()
@@ -156,7 +156,7 @@ class UpdateManager:
     async def _update_with_git(self) -> bool:
         """Update using git pull."""
         try:
-            console.print("📦 Updating via Git...", style="yellow")
+            console.print("[*] Updating via Git...", style="yellow")
             
             # Get current commit before update
             old_commit = self.get_current_commit() or "unknown"
@@ -184,7 +184,8 @@ class UpdateManager:
     async def _update_with_zip(self) -> bool:
         """Update by downloading ZIP from GitHub."""
         try:
-            console.print("📦 Downloading latest version...", style="yellow")
+            console.print("[*] Downloading latest version...", style="yellow")
+            console.print("[*] Please wait, this may take a moment...", style="dim")
             
             # Download ZIP
             zip_url = f"https://github.com/{self.repo_owner}/{self.repo_name}/archive/refs/heads/main.zip"
@@ -196,6 +197,7 @@ class UpdateManager:
                 temp_file.write(response.content)
                 temp_zip_path = temp_file.name
 
+            console.print("[*] Extracting files...", style="yellow")
             with tempfile.TemporaryDirectory() as temp_dir:
                 shutil.unpack_archive(temp_zip_path, temp_dir)
                 
@@ -230,7 +232,9 @@ class UpdateManager:
     async def _post_update_setup(self, old_commit: str, new_commit: str):
         """Perform post-update setup tasks."""
         # Update Python packages
-        console.print("📦 Updating Python packages...", style="yellow")
+        console.print("[*] Updating Python packages...", style="yellow")
+        console.print("[*] Please wait, this may take a moment...", style="dim")
+        
         venv_python = os.path.join(self.current_dir, "venv", "Scripts", "python.exe")
         requirements_file = os.path.join(self.current_dir, "requirements.txt")
         
@@ -242,7 +246,7 @@ class UpdateManager:
         EnvManager.set_env_variable("LAST_COMMIT_HASH", new_commit)
         EnvManager.set_env_variable("UPDATED", "true")
 
-        console.print("✅ Update completed successfully!", style="bold green")
+        console.print("[OK] Update completed successfully!", style="bold green")
         console.print("Please restart RetroChat to use the updated version.", style="cyan")
         
         # Exit to force restart
@@ -252,5 +256,5 @@ class UpdateManager:
         """Display message if app was recently updated."""
         updated = str(EnvManager.get_env_variable("UPDATED", "false")).lower() == "true"
         if updated:
-            console.print("🎉 RetroChat has been updated to the latest version!", style="bold green")
+            console.print("[SUCCESS] RetroChat has been updated to the latest version!", style="bold green")
             EnvManager.set_env_variable("UPDATED", "false")

@@ -20,7 +20,7 @@ class SetupManager:
             return
             
         # We're running from development/manual clone
-        console.print("🔧 Development Mode Detected", style="bold cyan")
+        console.print("[DEV] Development Mode Detected", style="bold cyan")
         console.print("You're running RetroChat from a development directory.", style="cyan")
         console.print("For the best experience, consider using the installer:", style="cyan")
         console.print("")
@@ -33,14 +33,14 @@ class SetupManager:
 
     def setup_rchat(self):
         """Legacy setup method - now directs to installer."""
-        console.print("🔧 Setup Method Changed", style="bold cyan")
+        console.print("[INFO] Setup Method Changed", style="bold cyan")
         console.print("The setup process has been simplified!", style="cyan")
         console.print("")
         console.print("Please use the new one-command installer:", style="bold blue")
         console.print("powershell -ExecutionPolicy Bypass -Command \"iwr -useb https://raw.githubusercontent.com/DefamationStation/Retrochat-v2/main/install.ps1 | iex\"", style="green")
         console.print("")
         console.print("This new installer will:", style="cyan")
-        console.print("• Download the latest version to ~/.retrochat/", style="cyan")
-        console.print("• Set up Python environment automatically", style="cyan")
-        console.print("• Create global 'rchat' command", style="cyan")
-        console.print("• Enable automatic updates", style="cyan")
+        console.print("* Download the latest version to ~/.retrochat/", style="cyan")
+        console.print("* Set up Python environment automatically", style="cyan")
+        console.print("* Create global 'rchat' command", style="cyan")
+        console.print("* Enable automatic updates", style="cyan")

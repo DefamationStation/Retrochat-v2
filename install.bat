@@ -1,5 +1,5 @@
 @echo off
-echo 🚀 RetroChat v2 - One-Click Installer
+echo ^>^> RetroChat v2 - One-Click Installer
 echo =====================================
 echo.
 echo This will install RetroChat v2 to your system.

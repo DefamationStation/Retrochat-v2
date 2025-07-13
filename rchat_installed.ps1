@@ -9,7 +9,7 @@ $SCRIPT_PATH = Join-Path $SOURCE_DIR "retrochat.py"
 
 # Check if installation exists
 if (-not (Test-Path $SOURCE_DIR)) {
-    Write-Host "❌ RetroChat installation not found at $SOURCE_DIR" -ForegroundColor Red
+    Write-Host "[ERROR] RetroChat installation not found at $SOURCE_DIR" -ForegroundColor Red
     Write-Host "Please run the installer first:" -ForegroundColor Yellow
     Write-Host "powershell -ExecutionPolicy Bypass -Command `"iwr -useb https://raw.githubusercontent.com/DefamationStation/Retrochat-v2/main/install.ps1 | iex`"" -ForegroundColor Cyan
     exit 1
@@ -17,7 +17,7 @@ if (-not (Test-Path $SOURCE_DIR)) {
 
 # Check if Python environment exists
 if (-not (Test-Path $PYTHON_EXE)) {
-    Write-Host "❌ Python environment not found. Please reinstall RetroChat." -ForegroundColor Red
+    Write-Host "[ERROR] Python environment not found. Please reinstall RetroChat." -ForegroundColor Red
     exit 1
 }
 
