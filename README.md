@@ -7,11 +7,12 @@ RetroChat is a powerful command-line interface for interacting with various AI l
 
 **One installer for all platforms (Windows/Linux/macOS):**
 
-```bash
 # Windows (PowerShell)
+```bash
 powershell -ExecutionPolicy Bypass -Command "iwr -useb https://raw.githubusercontent.com/DefamationStation/Retrochat-v2/main/install.ps1 | iex"
-
+```
 # Linux/macOS
+```bash
 curl -fsSL https://raw.githubusercontent.com/DefamationStation/Retrochat-v2/main/install.ps1 | pwsh -
 ```
 
