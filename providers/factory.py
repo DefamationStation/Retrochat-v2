@@ -71,10 +71,13 @@ class ChatProviderFactory:
         """
         providers = ChatProviderFactory._discover_providers()
         
-        # Handle special case for LM Studio
-        if provider_type == 'LMStudio':
-            provider_type = 'LM Studio'
-            
+        # Handle special case for LM Studio display name mapping
+        if provider_type == 'LM Studio':
+            # Look for the actual class by checking all discovered providers
+            for key, provider_class in providers.items():
+                if key == 'LM Studio' or (hasattr(provider_class, '__name__') and 'LMStudio' in provider_class.__name__):
+                    return provider_class(*args, **kwargs)
+        
         provider_class = providers.get(provider_type)
         if provider_class:
             return provider_class(*args, **kwargs)

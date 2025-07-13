@@ -120,10 +120,20 @@ class UpdateManager:
             console.print("\nRecent changes:", style="cyan")
             
             for i, commit in enumerate(available_updates, 1):
-                date_obj = datetime.fromisoformat(commit["date"].replace('Z', '+00:00'))
-                formatted_date = date_obj.strftime("%m/%d %H:%M")
-                console.print(f"  {i}. [{commit['sha']}] {commit['message']}", style="yellow")
-                console.print(f"     By {commit['author']} on {formatted_date}", style="dim")
+                try:
+                    date_obj = datetime.fromisoformat(commit["date"].replace('Z', '+00:00'))
+                    formatted_date = date_obj.strftime("%m/%d %H:%M")
+                    # Ensure we have a SHA, use truncated version or 'unknown'
+                    sha_display = commit.get('sha', 'unknown')
+                    if not sha_display or sha_display == 'unknown':
+                        sha_display = commit.get('full_sha', 'unknown')[:8] if commit.get('full_sha') else 'unknown'
+                    
+                    console.print(f"  {i}. [{sha_display}] {commit['message']}", style="yellow")
+                    console.print(f"     By {commit['author']} on {formatted_date}", style="dim")
+                except Exception as e:
+                    # Fallback for malformed commit data
+                    console.print(f"  {i}. {commit.get('message', 'Unknown commit')}", style="yellow")
+                    console.print(f"     By {commit.get('author', 'Unknown')} on {commit.get('date', 'Unknown date')}", style="dim")
 
             # Ask user if they want to update
             console.print("")
@@ -198,6 +208,10 @@ class UpdateManager:
                 temp_zip_path = temp_file.name
 
             console.print("[*] Extracting files...", style="yellow")
+            
+            # Create a delayed update script since we can't overwrite running files
+            update_script_path = os.path.join(Config.RETROCHAT_DIR, "update_script.ps1")
+            
             with tempfile.TemporaryDirectory() as temp_dir:
                 shutil.unpack_archive(temp_zip_path, temp_dir)
                 
@@ -205,25 +219,60 @@ class UpdateManager:
                 extracted_items = os.listdir(temp_dir)
                 source_dir = os.path.join(temp_dir, extracted_items[0])
                 
-                # Backup current installation
-                backup_dir = self.current_dir + "_backup"
-                if os.path.exists(backup_dir):
-                    shutil.rmtree(backup_dir)
+                # Create update script that will run after we exit
+                update_script_content = f"""
+# RetroChat Update Script - Auto-generated
+Start-Sleep -Seconds 3
+
+$sourceDir = "{self.current_dir}"
+$backupDir = $sourceDir + "_backup"
+$newDir = "{source_dir}"
+
+# Backup current installation
+if (Test-Path $backupDir) {{
+    Remove-Item $backupDir -Recurse -Force
+}}
+
+if (Test-Path $sourceDir) {{
+    Move-Item $sourceDir $backupDir
+}}
+
+# Move new files
+Move-Item $newDir $sourceDir
+
+# Update Python packages
+$pythonExe = Join-Path $sourceDir "venv\\Scripts\\python.exe"
+$requirementsFile = Join-Path $sourceDir "requirements.txt"
+
+if ((Test-Path $pythonExe) -and (Test-Path $requirementsFile)) {{
+    Set-Location $sourceDir
+    & $pythonExe -m pip install -r $requirementsFile --quiet
+}}
+
+# Clean up
+Remove-Item $backupDir -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item "{temp_zip_path}" -Force -ErrorAction SilentlyContinue
+Remove-Item $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue
+
+Write-Host "[OK] Update completed! RetroChat has been updated to the latest version." -ForegroundColor Green
+Write-Host "You can now run 'rchat' again." -ForegroundColor Cyan
+"""
                 
-                if os.path.exists(self.current_dir):
-                    shutil.move(self.current_dir, backup_dir)
-                
-                # Move new files
-                shutil.move(source_dir, self.current_dir)
-                
-                # Remove backup on success
-                if os.path.exists(backup_dir):
-                    shutil.rmtree(backup_dir)
+                with open(update_script_path, 'w', encoding='utf-8') as f:
+                    f.write(update_script_content)
 
             os.unlink(temp_zip_path)
             
-            await self._post_update_setup("zip_update", "zip_update")
-            return True
+            console.print("[OK] Update prepared. Restarting to complete update...", style="green")
+            
+            # Start the update script and exit
+            subprocess.Popen(['powershell', '-ExecutionPolicy', 'Bypass', '-File', update_script_path], 
+                           creationflags=subprocess.CREATE_NEW_CONSOLE)
+            
+            # Save update info and exit
+            EnvManager.set_env_variable("UPDATED", "true")
+            console.print("Exiting to complete update...", style="cyan")
+            sys.exit(0)
 
         except Exception as e:
             console.print(f"ZIP update failed: {str(e)}", style="bold red")
