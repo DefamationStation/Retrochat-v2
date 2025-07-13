@@ -25,6 +25,9 @@ from ui.display_manager import DisplayManager
 
 
 class ChatApp:
+    async def switch_provider(self):
+        """Delegate provider switching to the session manager."""
+        return await self.session_manager.switch_provider()
     def __init__(self):
         self.chat_name = 'default'
         self.history_manager = ChatHistoryManager(Config.DB_FILE)
