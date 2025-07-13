@@ -54,7 +54,7 @@ class OllamaInitializer(ProviderInitializer):
         return await chat_app.session_manager.ensure_ollama_connection()
     
     async def get_model(self, chat_app) -> Optional[str]:
-        return await chat_app.session_manager.select_ollama_model()
+        return await chat_app.session_manager.select_model_for_provider("Ollama")
     
     def create_session_args(self, chat_app, model: str) -> tuple:
         ollama_ip = EnvManager.get_env_variable(Config.OLLAMA_IP_KEY, 'localhost')
@@ -70,7 +70,7 @@ class AnthropicInitializer(ProviderInitializer):
         return await chat_app.session_manager.ensure_api_key('anthropic_api_key', Config.ANTHROPIC_API_KEY_NAME)
     
     async def get_model(self, chat_app) -> Optional[str]:
-        return await chat_app.session_manager.select_anthropic_model()
+        return await chat_app.session_manager.select_model_for_provider("Anthropic")
     
     def create_session_args(self, chat_app, model: str) -> tuple:
         api_key = EnvManager.get_env_variable(Config.ANTHROPIC_API_KEY_NAME)
@@ -84,7 +84,7 @@ class OpenAIInitializer(ProviderInitializer):
         return await chat_app.session_manager.ensure_api_key('openai_api_key', Config.OPENAI_API_KEY_NAME)
     
     async def get_model(self, chat_app) -> Optional[str]:
-        return await chat_app.session_manager.select_openai_model()
+        return await chat_app.session_manager.select_model_for_provider("OpenAI")
     
     def create_session_args(self, chat_app, model: str) -> tuple:
         api_key = EnvManager.get_env_variable(Config.OPENAI_API_KEY_NAME)
@@ -98,7 +98,7 @@ class GoogleInitializer(ProviderInitializer):
         return await chat_app.session_manager.ensure_api_key('google_api_key', Config.GOOGLE_API_KEY_NAME)
     
     async def get_model(self, chat_app) -> Optional[str]:
-        return await chat_app.session_manager.select_google_model()
+        return await chat_app.session_manager.select_model_for_provider("Google")
     
     def create_session_args(self, chat_app, model: str) -> tuple:
         api_key = EnvManager.get_env_variable(Config.GOOGLE_API_KEY_NAME)
@@ -112,7 +112,7 @@ class OpenRouterInitializer(ProviderInitializer):
         return await chat_app.session_manager.ensure_api_key('openrouter_api_key', Config.OPENROUTER_API_KEY_NAME)
     
     async def get_model(self, chat_app) -> Optional[str]:
-        return await chat_app.session_manager.select_openrouter_model()
+        return await chat_app.session_manager.select_model_for_provider("OpenRouter")
     
     def create_session_args(self, chat_app, model: str) -> tuple:
         api_key = EnvManager.get_env_variable(Config.OPENROUTER_API_KEY_NAME)
@@ -178,21 +178,21 @@ class ProviderRegistry:
             class_name='Anthropic',
             requires_api_key=True,
             api_key_env_var=Config.ANTHROPIC_API_KEY_NAME,
-            default_models=['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229']
+            default_models=['claude-3-5-sonnet-20241022']
         ),
         'OpenAI': ProviderConfig(
             name='OpenAI',
             class_name='OpenAI',
             requires_api_key=True,
             api_key_env_var=Config.OPENAI_API_KEY_NAME,
-            default_models=['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo']
+            default_models=['gpt-4o-mini', 'chatgpt-4o-latest', 'gpt-4o', 'o1-preview', 'o1-mini']
         ),
         'Google': ProviderConfig(
             name='Google',
             class_name='Google',
             requires_api_key=True,
             api_key_env_var=Config.GOOGLE_API_KEY_NAME,
-            default_models=['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-pro']
+            default_models=['gemini-2.0-flash-exp', 'gemini-1.5-flash-8b']
         ),
         'OpenRouter': ProviderConfig(
             name='OpenRouter',

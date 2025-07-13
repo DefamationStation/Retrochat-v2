@@ -82,10 +82,20 @@ class ChatProviderFactory:
     
     @staticmethod
     def get_providers() -> Dict[int, Tuple[str, Type[ChatProvider]]]:
-        """Get list of available providers with numbered index."""
-        providers = ChatProviderFactory._discover_providers()
+        """Get list of available providers with numbered index.
         
-        # Sort providers for consistent ordering
-        sorted_providers = sorted(providers.items())
+        Note: This method is deprecated. Use ProviderRegistry.get_all_providers() instead.
+        """
+        from providers.provider_config import ProviderRegistry
         
-        return {i + 1: (name, cls) for i, (name, cls) in enumerate(sorted_providers)}
+        # Get providers from registry for consistency
+        registry_providers = ProviderRegistry.get_all_providers()
+        discovered_providers = ChatProviderFactory._discover_providers()
+        
+        # Create numbered list based on registry order
+        result = {}
+        for i, provider_name in enumerate(registry_providers.keys(), 1):
+            if provider_name in discovered_providers:
+                result[i] = (provider_name, discovered_providers[provider_name])
+        
+        return result

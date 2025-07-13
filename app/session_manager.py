@@ -58,77 +58,73 @@ class SessionManager:
             console.print(f"Ollama connection details updated and saved in the .env file.", style="cyan")
             return await self.ensure_ollama_connection()
 
-    async def select_openrouter_model(self) -> Optional[str]:
-        models = OpenRouterChatSession.get_available_models()
-        console.print("Available OpenRouter models:", style="cyan")
-        for idx, model in enumerate(models):
-            console.print(f"{idx + 1}. {model}", style="green")
-        choice = await self.chat_app.input_handler.get_single_input("Select a model number")
-        try:
-            return models[int(choice) - 1]
-        except (ValueError, IndexError):
-            console.print("Invalid selection. Please try again.", style="bold red")
+    async def select_model_for_provider(self, provider_name: str, **kwargs) -> Optional[str]:
+        """Unified model selection method for all providers."""
+        from providers.provider_config import ProviderRegistry
+        
+        config = ProviderRegistry.get_provider_config(provider_name)
+        if not config:
+            console.print(f"Unknown provider: {provider_name}", style="bold red")
             return None
 
-    async def select_ollama_model(self) -> Optional[str]:
-        ollama_ip = EnvManager.get_env_variable(Config.OLLAMA_IP_KEY, 'localhost')
-        ollama_port = EnvManager.get_env_variable(Config.OLLAMA_PORT_KEY, '11434')
-        url = f"http://{ollama_ip}:{ollama_port}/api/tags"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                if response.status == 200:
-                    models_info = await response.json()
-                    if isinstance(models_info, dict) and 'models' in models_info:
-                        model_names = [model['name'] for model in models_info['models']]
-                        console.print("Available Ollama models:", style="cyan")
-                        for idx, model in enumerate(model_names):
-                            console.print(f"{idx + 1}. {model}", style="green")
-                        choice = await self.chat_app.input_handler.get_single_input("Select a model")
-                        try:
-                            return model_names[int(choice) - 1]
-                        except (ValueError, IndexError):
-                            console.print("Invalid selection. Please try again.", style="bold red")
+        # Get models based on provider type
+        models = []
+        display_name = config.name
+        
+        if provider_name == "OpenRouter":
+            models = OpenRouterChatSession.get_available_models()
+            display_name = "OpenRouter"
+        elif provider_name == "Ollama":
+            ollama_ip = EnvManager.get_env_variable(Config.OLLAMA_IP_KEY, 'localhost')
+            ollama_port = EnvManager.get_env_variable(Config.OLLAMA_PORT_KEY, '11434')
+            url = f"http://{ollama_ip}:{ollama_port}/api/tags"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        models_info = await response.json()
+                        if isinstance(models_info, dict) and 'models' in models_info:
+                            models = [model['name'] for model in models_info['models']]
+                        else:
+                            console.print("Unexpected API response structure.", style="bold red")
                             return None
                     else:
-                        console.print("Unexpected API response structure.", style="bold red")
-                else:
-                    console.print(f"Error fetching Ollama models: {response.status} - {await response.text()}", style="bold red")
-        return None
+                        console.print(f"Error fetching Ollama models: {response.status} - {await response.text()}", style="bold red")
+                        return None
+        elif provider_name == "LM Studio":
+            base_url = kwargs.get('base_url')
+            if not base_url:
+                console.print("Base URL required for LM Studio model selection", style="bold red")
+                return None
+            models = await LMStudioChatSession.get_available_models(base_url)
+            if not models:
+                console.print("No models available from LM Studio. Make sure LM Studio is running and has models loaded.", style="bold red")
+                return None
+            display_name = "LM Studio"
+        else:
+            # Use default models from config for static providers
+            models = config.default_models
+            if provider_name == "Google":
+                display_name = "Google Gemini"
 
-    async def select_anthropic_model(self) -> Optional[str]:
-        models = ["claude-3-5-sonnet-20241022"]
-        console.print("Available Anthropic models:", style="cyan")
-        for idx, model in enumerate(models):
-            console.print(f"{idx + 1}. {model}", style="green")
-        choice = await self.chat_app.input_handler.get_single_input("Select a model number")
-        try:
-            return models[int(choice) - 1]
-        except (ValueError, IndexError):
-            console.print("Invalid selection. Please try again.", style="bold red")
+        if not models:
+            console.print(f"No models available for {display_name}", style="bold red")
             return None
 
-    async def select_openai_model(self) -> Optional[str]:
-        models = ["gpt-4o-mini", "chatgpt-4o-latest", "gpt-4o", "o1-preview", "o1-mini"]
-        console.print("Available OpenAI models:", style="cyan")
+        # Display models and get selection
+        console.print(f"Available {display_name} models:", style="cyan")
         for idx, model in enumerate(models):
             console.print(f"{idx + 1}. {model}", style="green")
+        
         choice = await self.chat_app.input_handler.get_single_input("Select a model number")
         try:
-            return models[int(choice) - 1]
-        except (ValueError, IndexError):
-            console.print("Invalid selection. Please try again.", style="bold red")
-            return None
-    
-    async def select_google_model(self) -> Optional[str]:
-        models = ["gemini-2.0-flash-exp", "gemini-1.5-flash-8b"]
-        console.print("Available Google Gemini models:", style="cyan")
-        for idx, model in enumerate(models):
-            console.print(f"{idx + 1}. {model}", style="green")
-        choice = await self.chat_app.input_handler.get_single_input("Select a model number")
-        try:
-            return models[int(choice) - 1]
-        except (ValueError, IndexError):
-            console.print("Invalid selection. Please try again.", style="bold red")
+            model_index = int(choice) - 1
+            if 0 <= model_index < len(models):
+                return models[model_index]
+            else:
+                console.print("Invalid selection. Please try again.", style="bold red")
+                return None
+        except ValueError:
+            console.print("Invalid input. Please enter a number.", style="bold red")
             return None
 
     async def select_oobabooga_character(self) -> Optional[str]:
@@ -148,48 +144,33 @@ class SessionManager:
 
     async def select_lmstudio_model(self, base_url: str) -> Optional[str]:
         """Select an LM Studio model from available models."""
-        models = await LMStudioChatSession.get_available_models(base_url)
-        
-        if not models:
-            console.print("No models available from LM Studio. Make sure LM Studio is running and has models loaded.", style="bold red")
-            return None
-            
-        console.print("Available LM Studio models:", style="cyan")
-        for idx, model in enumerate(models):
-            console.print(f"{idx + 1}. {model}", style="green")
-        
-        choice = await self.chat_app.input_handler.get_single_input("Select a model number")
-        try:
-            model_index = int(choice) - 1
-            if 0 <= model_index < len(models):
-                return models[model_index]
-            else:
-                console.print("Invalid selection. Please try again.", style="bold red")
-                return None
-        except ValueError:
-            console.print("Invalid input. Please enter a number.", style="bold red")
-            return None
+        return await self.select_model_for_provider("LM Studio", base_url=base_url)
 
     async def switch_provider(self):
         """Switch to a different provider using the unified session manager."""
-        # Get available providers dynamically from factory
-        available_providers = self.chat_app.provider_factory.get_providers()
+        from providers.provider_config import ProviderRegistry
+        
+        # Get available providers from registry instead of factory
+        available_providers = ProviderRegistry.get_all_providers()
+        
+        # Create numbered list for selection
+        provider_list = list(available_providers.keys())
         
         # Display provider options
         console.print("Select provider:", style="cyan")
-        for idx, (name, _) in available_providers.items():
-            console.print(f"{idx}. {name}", style="cyan")
+        for idx, provider_name in enumerate(provider_list, 1):
+            console.print(f"{idx}. {provider_name}", style="cyan")
         
         mode = await self.chat_app.input_handler.get_single_input("Enter your choice")
         
         try:
             choice = int(mode)
-            if choice not in available_providers:
+            if 1 <= choice <= len(provider_list):
+                provider_name = provider_list[choice - 1]
+            else:
                 console.print("Invalid choice.", style="bold red")
                 return None
                 
-            provider_name, provider_class = available_providers[choice]
-            
         except ValueError:
             console.print("Invalid choice. Please enter a number.", style="bold red")
             return None
@@ -212,3 +193,19 @@ class SessionManager:
         else:
             session.chat_history = []
             session.system_message = None
+
+        # Legacy methods for backward compatibility (deprecated)
+    async def select_openrouter_model(self) -> Optional[str]:
+        return await self.select_model_for_provider("OpenRouter")
+    
+    async def select_ollama_model(self) -> Optional[str]:
+        return await self.select_model_for_provider("Ollama")
+    
+    async def select_anthropic_model(self) -> Optional[str]:
+        return await self.select_model_for_provider("Anthropic")
+    
+    async def select_openai_model(self) -> Optional[str]:
+        return await self.select_model_for_provider("OpenAI")
+    
+    async def select_google_model(self) -> Optional[str]:
+        return await self.select_model_for_provider("Google")
