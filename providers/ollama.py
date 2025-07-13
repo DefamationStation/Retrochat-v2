@@ -12,7 +12,7 @@ console = Console()
 
 class OllamaChatSession(ChatProvider):
     def __init__(self, model_url: str, model: str, history_manager):
-        super().__init__(history_manager)
+        super().__init__(history_manager, "ollama")
         self.model_url = model_url
         self.model = model
         self.default_parameters.update({
@@ -25,29 +25,7 @@ class OllamaChatSession(ChatProvider):
             "stop": None,
         })
     
-    def set_parameter(self, param: str, value: Any):
-        if param in self.default_parameters or param in ["repeat_penalty", "frequency_penalty"]:
-            if param in ["num_predict", "top_k", "repeat_last_n", "num_ctx"]:
-                value = int(value)
-            elif param in ["top_p", "temperature", "repeat_penalty", "frequency_penalty"]:
-                value = float(value)
-            elif param == "stop":
-                value = value.split() if isinstance(value, str) else value
-            elif param == "verbose":
-                value = str(value).lower() == "true"
-            
-            if param in ["repeat_penalty", "frequency_penalty"]:
-                self.parameters["repeat_penalty"] = value
-                self.parameters["frequency_penalty"] = value
-            else:
-                self.parameters[param] = value
-            
-            self.history_manager.save_parameters(self.parameters)
-            
-            if param != "verbose" or value:
-                console.print(f"Parameter '{param}' set to {value}", style="cyan")
-        else:
-            console.print(f"Invalid parameter: {param}", style="bold red")
+    
 
     async def send_message(self, message: str):
         self.add_to_history("user", message)

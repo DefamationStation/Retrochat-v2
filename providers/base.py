@@ -5,7 +5,7 @@ This module contains the abstract base class for all chat providers.
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Any
+from typing import List, Any, Optional
 
 from rich.panel import Panel
 from rich.markdown import Markdown
@@ -17,12 +17,13 @@ from core.history_manager import ChatHistoryManager
 from core.code_formatter import CodeBlockFormatter
 from core.parameter_manager import UnifiedParameterManager
 from models.chat_message import ChatMessage
+from core.http_handler import RequestConfig, HttpHandlerFactory
 
 
 class ChatProvider(ABC):
     """Abstract base class for all chat providers."""
     
-    def __init__(self, history_manager: ChatHistoryManager):
+    def __init__(self, history_manager: ChatHistoryManager, provider_name: Optional[str] = None):
         self.history_manager = history_manager
         self.chat_history = self.load_history()
         self.system_message = self.history_manager.load_system_message()
@@ -48,6 +49,12 @@ class ChatProvider(ABC):
         
         self.tokenizer_manager = TokenizerManager()
         self._initialize_parameters()
+        
+        # Initialize HTTP handler if provider_name is provided
+        if provider_name:
+            self.http_handler = HttpHandlerFactory.create_handler(provider_name.lower())
+        else:
+            self.http_handler = None
 
     def _initialize_parameters(self):
         """Ensure all default parameters are set in the parameter manager."""
@@ -77,6 +84,38 @@ class ChatProvider(ABC):
         Always yield at least one value, even in error cases.
         """
         yield NotImplementedError("send_message must be implemented by subclasses.")
+
+    async def _send_streaming_request(self, config: RequestConfig):
+        """Helper method to send a streaming request and handle the response."""
+        if not self.http_handler:
+            yield "Error: HTTP handler not initialized."
+            return
+
+        complete_message = ""
+        async for chunk in self.http_handler.send_request(config):
+            if chunk is None:
+                # End of streaming
+                break
+            elif isinstance(chunk, str):
+                if chunk.startswith("Error:"):
+                    # This is an error message
+                    yield chunk
+                    return
+                else:
+                    # This is content
+                    complete_message += chunk
+                    yield chunk
+        
+        # Process complete message
+        if complete_message:
+            formatted_message = self.format_message(complete_message)
+            self.add_to_history("assistant", formatted_message)
+            
+            if self.parameters.get("verbose", False):
+                tokens = self.calculate_tokens(formatted_message)
+                total_tokens = self.calculate_total_tokens()
+                console.print(f"\nResponse tokens: {tokens}", style="cyan")
+                console.print(f"Total conversation tokens: {total_tokens}", style="cyan")
 
     def add_to_history(self, role: str, content: str):
         """Add a message to the chat history."""

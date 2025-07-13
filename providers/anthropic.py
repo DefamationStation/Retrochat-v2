@@ -10,7 +10,7 @@ console = Console()
 
 class AnthropicChatSession(ChatProvider):
     def __init__(self, api_key: str, model_url: str, history_manager, model: str):
-        super().__init__(history_manager)
+        super().__init__(history_manager, "anthropic")
         self.api_key = api_key
         self.model_url = model_url
         self.model = model

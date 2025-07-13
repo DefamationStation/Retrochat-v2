@@ -15,7 +15,7 @@ console = Console()
 
 class GoogleChatSession(ChatProvider):
     def __init__(self, api_key: str, model: str, history_manager):
-        super().__init__(history_manager)
+        super().__init__(history_manager, "google")
         self.api_key = api_key
         self.model = model
         
@@ -99,31 +99,4 @@ class GoogleChatSession(ChatProvider):
         super().add_to_history(role, content)
         self.chat = self.initialize_chat()
 
-    def set_parameter(self, param: str, value: Any):
-        if param in self.default_parameters:
-            if param in ["candidate_count", "max_tokens", "top_k"]:
-                value = int(value)
-            elif param in ["temperature", "top_p"]:
-                value = float(value)
-            elif param == "verbose":
-                value = str(value).lower() == "true"
-            
-            self.parameters[param] = value
-            self.history_manager.save_parameters(self.parameters)
-            
-            if param != "verbose" or value:
-                console.print(f"Parameter '{param}' set to {value}", style="cyan")
-        else:
-            console.print(f"Invalid parameter: {param}", style="bold red")
-
-    def show_parameters(self):
-        console.print("Current Parameters:", style="cyan")
-        for param, default_value in self.default_parameters.items():
-            current_value = self.parameters.get(param, default_value)
-            if param == "max_tokens":
-                console.print(f"max_tokens (max_output_tokens): {current_value}", style="green")
-            else:
-                console.print(f"{param}: {current_value}", style="green")
-        
-        if self.system_message:
-            console.print(f"system: {self.system_message}", style="green")
+    

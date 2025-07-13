@@ -12,7 +12,7 @@ console = Console()
 
 class OobaboogaChatSession(ChatProvider):
     def __init__(self, base_url: str, character: str, history_manager):
-        super().__init__(history_manager)
+        super().__init__(history_manager, "oobabooga")
         self.base_url = base_url
         self.character = character
         self.headers = {"Content-Type": "application/json"}
@@ -81,21 +81,4 @@ class OobaboogaChatSession(ChatProvider):
                     console.print(error_message, style="bold red")
                     yield error_message
 
-    def set_parameter(self, param: str, value: Any):
-        if param in self.default_parameters or param == "verbose":
-            if param in ["max_new_tokens", "top_k", "min_length", "no_repeat_ngram_size", "num_beams", "seed", "truncation_length"]:
-                value = int(value)
-            elif param in ["temperature", "top_p", "typical_p", "repetition_penalty", "encoder_repetition_penalty", "penalty_alpha", "length_penalty"]:
-                value = float(value)
-            elif param in ["add_bos_token", "ban_eos_token", "skip_special_tokens", "early_stopping", "verbose"]:
-                value = str(value).lower() == "true"
-            elif param == "stopping_strings":
-                value = value.split(',') if isinstance(value, str) else value
-            
-            self.parameters[param] = value
-            self.history_manager.save_parameters(self.parameters)
-            
-            if param != "verbose" or value:
-                console.print(f"Parameter '{param}' set to {value}", style="cyan")
-        else:
-            console.print(f"Invalid parameter: {param}", style="bold red")
+    

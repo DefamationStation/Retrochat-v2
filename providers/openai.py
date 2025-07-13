@@ -12,13 +12,10 @@ console = Console()
 
 class OpenAIChatSession(ChatProvider):
     def __init__(self, api_key: str, base_url: str, model: str, history_manager):
-        super().__init__(history_manager)
+        super().__init__(history_manager, "openai")
         self.api_key = api_key
         self.base_url = base_url
         self.model = model
-        
-        # Initialize HTTP handler
-        self.http_handler = HttpHandlerFactory.create_handler('openai')
         
         self.default_parameters.update({
             "frequency_penalty": 1.1,
@@ -49,29 +46,6 @@ class OpenAIChatSession(ChatProvider):
             stream=True
         )
         
-        # Use unified HTTP handler
-        complete_message = ""
-        async for chunk in self.http_handler.send_request(config):
-            if chunk is None:
-                # End of streaming
-                break
-            elif isinstance(chunk, str):
-                if chunk.startswith("Error:"):
-                    # This is an error message
-                    yield chunk
-                    return
-                else:
-                    # This is content
-                    complete_message += chunk
-                    yield chunk
-        
-        # Process complete message
-        if complete_message:
-            formatted_message = self.format_message(complete_message)
-            self.add_to_history("assistant", formatted_message)
-            
-            if self.parameters.get("verbose", False):
-                tokens = self.calculate_tokens(formatted_message)
-                total_tokens = self.calculate_total_tokens()
-                console.print(f"Response tokens: {tokens}", style="cyan")
-                console.print(f"Total conversation tokens: {total_tokens}", style="cyan")
+        # Use the unified streaming request method
+        async for chunk in self._send_streaming_request(config):
+            yield chunk

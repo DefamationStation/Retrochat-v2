@@ -14,7 +14,7 @@ console = Console()
 
 class OpenRouterChatSession(ChatProvider):
     def __init__(self, api_key: str, model: str, history_manager):
-        super().__init__(history_manager)
+        super().__init__(history_manager, "openrouter")
         self.api_key = api_key
         self.model = model
         self.default_parameters.update({
