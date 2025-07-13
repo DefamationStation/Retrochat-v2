@@ -4,7 +4,8 @@
 
 param(
     [switch]$Force,
-    [string]$Branch = "main"
+    [string]$Branch = "main",
+    [string]$CustomPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,7 +13,7 @@ $ErrorActionPreference = "Stop"
 # Configuration
 $REPO_OWNER = "DefamationStation"
 $REPO_NAME = "Retrochat-v2"
-$INSTALL_DIR = Join-Path $env:USERPROFILE ".retrochat"
+$INSTALL_DIR = if ($CustomPath) { $CustomPath } else { Join-Path $env:USERPROFILE ".retrochat" }
 $SOURCE_DIR = Join-Path $INSTALL_DIR "source"
 $VENV_DIR = Join-Path $SOURCE_DIR "venv"
 $PYTHON_EXE = Join-Path $VENV_DIR "Scripts\python.exe"

@@ -180,9 +180,10 @@ class UpdateManager:
             # Get current commit before update
             old_commit = self.get_current_commit() or "unknown"
 
+            # Ensure we're running git from repo root, not venv
             # Fetch first to check for changes
             result = subprocess.run(['git', 'fetch'], cwd=self.current_dir, 
-                                  capture_output=True, text=True)
+                                  capture_output=True, text=True, env=dict(os.environ))
             if result.returncode != 0:
                 console.print(f"Git fetch failed: {result.stderr}", style="yellow")
                 console.print("Falling back to ZIP download...", style="yellow")
@@ -190,17 +191,17 @@ class UpdateManager:
 
             # Check if there are actually new commits
             result = subprocess.run(['git', 'rev-list', 'HEAD..origin/main', '--count'], 
-                                  cwd=self.current_dir, capture_output=True, text=True)
+                                  cwd=self.current_dir, capture_output=True, text=True, env=dict(os.environ))
             if result.returncode == 0:
                 commit_count = int(result.stdout.strip())
                 if commit_count == 0:
                     console.print("[OK] Already up to date via Git!", style="green")
                     return True
 
-            # Pull latest changes
+            # Pull latest changes - run from repo root, not venv
             console.print("[*] Pulling latest changes...", style="yellow")
             result = subprocess.run(['git', 'pull'], cwd=self.current_dir, 
-                                  capture_output=True, text=True)
+                                  capture_output=True, text=True, env=dict(os.environ))
             if result.returncode != 0:
                 console.print(f"Git pull failed: {result.stderr}", style="bold red")
                 console.print("Falling back to ZIP download...", style="yellow")
@@ -307,7 +308,7 @@ Write-Host "You can now run 'rchat' again." -ForegroundColor Cyan
 
     async def _post_update_setup(self, old_commit: str, new_commit: str):
         """Perform post-update setup tasks."""
-        # Update Python packages
+        # Update Python packages (this needs venv)
         console.print("[*] Updating Python packages...", style="yellow")
         console.print("[*] Please wait, this may take a moment...", style="dim")
         
@@ -315,6 +316,7 @@ Write-Host "You can now run 'rchat' again." -ForegroundColor Cyan
         requirements_file = os.path.join(self.current_dir, "requirements.txt")
         
         if os.path.exists(venv_python) and os.path.exists(requirements_file):
+            # Run pip install from the repo root, but using venv python
             result = subprocess.run([venv_python, "-m", "pip", "install", "-r", requirements_file, "--quiet"],
                          cwd=self.current_dir)
             if result.returncode == 0:
