@@ -34,6 +34,7 @@ class Config:
     OLLAMA_PORT_KEY = "OLLAMA_PORT"
     LAST_PROVIDER_KEY = "LAST_PROVIDER"
     LAST_MODEL_KEY = "LAST_MODEL"
+    LMSTUDIO_BASE_URL_KEY = "LMSTUDIO_BASE_URL"
 
     @classmethod
     def initialize(cls):

@@ -57,16 +57,15 @@ class LMStudioChatSession(ChatProvider):
                 value = value.split() if isinstance(value, str) else value
             elif param == "verbose":
                 value = str(value).lower() == "true"
-            
-            if param in ["repeat_penalty", "frequency_penalty"]:
-                self.parameters["frequency_penalty"] = value
-            else:
-                self.parameters[param] = value
-            
-            self.history_manager.save_parameters(self.parameters)
-            
-            if param != "verbose" or value:
-                console.print(f"Parameter '{param}' set to {value}", style="cyan")
+
+            # Only set and print if value actually changes
+            key = "frequency_penalty" if param in ["repeat_penalty", "frequency_penalty"] else param
+            old_value = self.parameters.get(key)
+            if old_value != value:
+                self.parameters[key] = value
+                self.history_manager.save_parameters(self.parameters)
+                if param != "verbose" or value:
+                    console.print(f"Parameter '{param}' set to {value}", style="cyan")
         else:
             console.print(f"Invalid parameter: {param}", style="bold red")
 

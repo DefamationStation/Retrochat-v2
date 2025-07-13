@@ -259,8 +259,12 @@ class SessionManager:
                 base_url, character, self.chat_app.history_manager)
                 
         elif provider_name == 'LM Studio':
-            base_url = await self.chat_app.input_handler.get_single_input("Enter LM Studio base URL (default: http://localhost:1234)")
-            base_url = base_url or "http://localhost:1234"
+            base_url = EnvManager.get_env_variable(Config.LMSTUDIO_BASE_URL_KEY)
+            if not base_url:
+                base_url = await self.chat_app.input_handler.get_single_input("Enter LM Studio base URL (default: http://localhost:1234)")
+                base_url = base_url or "http://localhost:1234"
+                EnvManager.set_env_variable(Config.LMSTUDIO_BASE_URL_KEY, base_url)
+                console.print("LM Studio base URL saved in .env file.", style="cyan")
             selected_model = await self.select_lmstudio_model(base_url)
             if not selected_model:
                 return None
@@ -313,8 +317,12 @@ class SessionManager:
             with contextlib.redirect_stderr(io.StringIO()):
                 new_session = self.chat_app.provider_factory.create_provider('Oobabooga', base_url, self.chat_app.last_model, self.chat_app.history_manager)
         elif self.chat_app.last_provider == 'LM Studio':
-            base_url = await self.chat_app.input_handler.get_single_input("Enter LM Studio base URL (default: http://localhost:1234)")
-            base_url = base_url or "http://localhost:1234"
+            base_url = EnvManager.get_env_variable(Config.LMSTUDIO_BASE_URL_KEY)
+            if not base_url:
+                base_url = await self.chat_app.input_handler.get_single_input("Enter LM Studio base URL (default: http://localhost:1234)")
+                base_url = base_url or "http://localhost:1234"
+                EnvManager.set_env_variable(Config.LMSTUDIO_BASE_URL_KEY, base_url)
+                console.print("LM Studio base URL saved in .env file.", style="cyan")
             with contextlib.redirect_stderr(io.StringIO()):
                 new_session = self.chat_app.provider_factory.create_provider('LM Studio', base_url, self.chat_app.last_model, self.chat_app.history_manager)
                     
