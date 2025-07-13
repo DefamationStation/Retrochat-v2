@@ -14,11 +14,13 @@ from providers.google import GoogleChatSession
 from providers.ollama import OllamaChatSession
 from providers.oobabooga import OobaboogaChatSession
 from providers.lmstudio import LMStudioChatSession
+from providers.unified_session_manager import UnifiedSessionManager
 
 
 class SessionManager:
     def __init__(self, chat_app):
         self.chat_app = chat_app
+        self.unified_manager = UnifiedSessionManager(chat_app)
 
     async def ensure_api_key(self, key_name: str, env_var: str):
         api_key = EnvManager.get_env_variable(env_var)
@@ -169,6 +171,7 @@ class SessionManager:
             return None
 
     async def switch_provider(self):
+        """Switch to a different provider using the unified session manager."""
         # Get available providers dynamically from factory
         available_providers = self.chat_app.provider_factory.get_providers()
         
@@ -186,149 +189,17 @@ class SessionManager:
                 return None
                 
             provider_name, provider_class = available_providers[choice]
-            selected_model = None
-            new_session = None
             
         except ValueError:
             console.print("Invalid choice. Please enter a number.", style="bold red")
             return None
 
-        # Handle provider-specific logic
-        if provider_name == 'Ollama':
-            if not self.ensure_ollama_connection():
-                return None
-            selected_model = await self.select_ollama_model()
-            if not selected_model:
-                return None
-            ollama_ip = EnvManager.get_env_variable(Config.OLLAMA_IP_KEY, 'localhost')
-            ollama_port = EnvManager.get_env_variable(Config.OLLAMA_PORT_KEY, '11434')
-            model_url = f"http://{ollama_ip}:{ollama_port}/api/chat"
-            new_session = self.chat_app.provider_factory.create_provider('Ollama', model_url, selected_model, self.chat_app.history_manager)
-            
-        elif provider_name == 'Anthropic':
-            if not self.ensure_api_key('anthropic_api_key', Config.ANTHROPIC_API_KEY_NAME):
-                return None
-            selected_model = await self.select_anthropic_model()
-            if not selected_model:
-                return None
-            new_session = self.chat_app.provider_factory.create_provider('Anthropic', 
-                EnvManager.get_env_variable(Config.ANTHROPIC_API_KEY_NAME),
-                "https://api.anthropic.com/v1/messages", 
-                self.chat_app.history_manager, selected_model)
-                
-        elif provider_name == 'OpenAI':
-            if not self.ensure_api_key('openai_api_key', Config.OPENAI_API_KEY_NAME):
-                return None
-            selected_model = await self.select_openai_model()
-            if not selected_model:
-                return None
-            new_session = self.chat_app.provider_factory.create_provider('OpenAI', 
-                EnvManager.get_env_variable(Config.OPENAI_API_KEY_NAME),
-                "https://api.openai.com/v1/chat/completions", 
-                selected_model, self.chat_app.history_manager)
-                
-        elif provider_name == 'Google':
-            if not self.ensure_api_key('google_api_key', Config.GOOGLE_API_KEY_NAME):
-                return None
-            selected_model = await self.select_google_model()
-            if not selected_model:
-                return None
-            with SuppressLogging():
-                new_session = self.chat_app.provider_factory.create_provider('Google', 
-                    EnvManager.get_env_variable(Config.GOOGLE_API_KEY_NAME), 
-                    selected_model, self.chat_app.history_manager)
-                    
-        elif provider_name == 'OpenRouter':
-            if not self.ensure_api_key('openrouter_api_key', Config.OPENROUTER_API_KEY_NAME):
-                return None
-            selected_model = await self.select_openrouter_model()
-            if not selected_model:
-                return None
-            new_session = self.chat_app.provider_factory.create_provider('OpenRouter', 
-                EnvManager.get_env_variable(Config.OPENROUTER_API_KEY_NAME), 
-                selected_model, self.chat_app.history_manager)
-                
-        elif provider_name == 'Oobabooga':
-            base_url = await self.chat_app.input_handler.get_single_input("Enter Oobabooga base URL (default: http://127.0.0.1:5000)")
-            base_url = base_url or "http://127.0.0.1:5000"
-            character = await self.select_oobabooga_character()
-            if not character:
-                return None
-            selected_model = character  # For Oobabooga, the "model" is the character
-            new_session = self.chat_app.provider_factory.create_provider('Oobabooga', 
-                base_url, character, self.chat_app.history_manager)
-                
-        elif provider_name == 'LM Studio':
-            base_url = EnvManager.get_env_variable(Config.LMSTUDIO_BASE_URL_KEY)
-            if not base_url:
-                base_url = await self.chat_app.input_handler.get_single_input("Enter LM Studio base URL (default: http://localhost:1234)")
-                base_url = base_url or "http://localhost:1234"
-                EnvManager.set_env_variable(Config.LMSTUDIO_BASE_URL_KEY, base_url)
-                console.print("LM Studio base URL saved in .env file.", style="cyan")
-            selected_model = await self.select_lmstudio_model(base_url)
-            if not selected_model:
-                return None
-            new_session = self.chat_app.provider_factory.create_provider('LM Studio', 
-                base_url, selected_model, self.chat_app.history_manager)
-        else:
-            console.print(f"Provider '{provider_name}' is not yet fully implemented.", style="bold red")
-            return None
-
-        if new_session:
-            self.apply_saved_parameters(new_session)
-            self.chat_app.save_last_provider_and_model(provider_name, selected_model)
-            return new_session
-        return None
+        # Use unified session creation
+        return await self.unified_manager.create_session_for_provider(provider_name)
 
     async def create_session_from_last(self):
-        new_session = None
-        
-        if self.chat_app.last_provider == 'Google':
-            if not self.ensure_api_key('google_api_key', Config.GOOGLE_API_KEY_NAME):
-                return None
-            with SuppressLogging():
-                new_session = self.chat_app.provider_factory.create_provider('Google', EnvManager.get_env_variable(Config.GOOGLE_API_KEY_NAME), self.chat_app.last_model, self.chat_app.history_manager)
-        elif self.chat_app.last_provider == 'Ollama':
-            if not self.ensure_ollama_connection():
-                return None
-            ollama_ip = EnvManager.get_env_variable(Config.OLLAMA_IP_KEY, 'localhost')
-            ollama_port = EnvManager.get_env_variable(Config.OLLAMA_PORT_KEY, '11434')
-            model_url = f"http://{ollama_ip}:{ollama_port}/api/chat"
-            with contextlib.redirect_stderr(io.StringIO()):
-                new_session = self.chat_app.provider_factory.create_provider('Ollama', model_url, self.chat_app.last_model, self.chat_app.history_manager)
-        elif self.chat_app.last_provider == 'Anthropic':
-            if not self.ensure_api_key('anthropic_api_key', Config.ANTHROPIC_API_KEY_NAME):
-                return None
-            with contextlib.redirect_stderr(io.StringIO()):
-                new_session = self.chat_app.provider_factory.create_provider('Anthropic', EnvManager.get_env_variable(Config.ANTHROPIC_API_KEY_NAME), "https://api.anthropic.com/v1/messages", self.chat_app.history_manager, self.chat_app.last_model)
-        elif self.chat_app.last_provider == 'OpenAI':
-            if not self.ensure_api_key('openai_api_key', Config.OPENAI_API_KEY_NAME):
-                return None
-            with contextlib.redirect_stderr(io.StringIO()):
-                new_session = self.chat_app.provider_factory.create_provider('OpenAI', EnvManager.get_env_variable(Config.OPENAI_API_KEY_NAME), "https://api.openai.com/v1/chat/completions", self.chat_app.last_model, self.chat_app.history_manager)
-        elif self.chat_app.last_provider == 'OpenRouter':
-            if not self.ensure_api_key('openrouter_api_key', Config.OPENROUTER_API_KEY_NAME):
-                return None
-            with contextlib.redirect_stderr(io.StringIO()):
-                new_session = self.chat_app.provider_factory.create_provider('OpenRouter', EnvManager.get_env_variable(Config.OPENROUTER_API_KEY_NAME), self.chat_app.last_model, self.chat_app.history_manager)
-        elif self.chat_app.last_provider == 'Oobabooga':
-            base_url = await self.chat_app.input_handler.get_single_input("Enter Oobabooga base URL (default: http://127.0.0.1:5000)")
-            base_url = base_url or "http://127.0.0.1:5000"
-            with contextlib.redirect_stderr(io.StringIO()):
-                new_session = self.chat_app.provider_factory.create_provider('Oobabooga', base_url, self.chat_app.last_model, self.chat_app.history_manager)
-        elif self.chat_app.last_provider == 'LM Studio':
-            base_url = EnvManager.get_env_variable(Config.LMSTUDIO_BASE_URL_KEY)
-            if not base_url:
-                base_url = await self.chat_app.input_handler.get_single_input("Enter LM Studio base URL (default: http://localhost:1234)")
-                base_url = base_url or "http://localhost:1234"
-                EnvManager.set_env_variable(Config.LMSTUDIO_BASE_URL_KEY, base_url)
-                console.print("LM Studio base URL saved in .env file.", style="cyan")
-            with contextlib.redirect_stderr(io.StringIO()):
-                new_session = self.chat_app.provider_factory.create_provider('LM Studio', base_url, self.chat_app.last_model, self.chat_app.history_manager)
-                    
-        if new_session:
-            self.apply_saved_parameters(new_session)
-        return new_session
+        """Create a session from the last used provider using unified logic."""
+        return await self.unified_manager.create_session_from_last_provider()
 
     def apply_saved_parameters(self, session):
         saved_params = self.chat_app.history_manager.load_parameters()

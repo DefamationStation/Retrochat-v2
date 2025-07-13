@@ -15,6 +15,7 @@ from utils.console import console
 from utils.tokenizer import TokenizerManager
 from core.history_manager import ChatHistoryManager
 from core.code_formatter import CodeBlockFormatter
+from core.parameter_manager import UnifiedParameterManager
 from models.chat_message import ChatMessage
 
 
@@ -25,8 +26,17 @@ class ChatProvider(ABC):
         self.history_manager = history_manager
         self.chat_history = self.load_history()
         self.system_message = self.history_manager.load_system_message()
-        self.parameters = self.history_manager.load_parameters()
+        
+        # Initialize unified parameter manager
+        self.parameter_manager = UnifiedParameterManager(history_manager)
+        self.parameter_manager.load_parameters()
+        
         self.code_block_formatter = CodeBlockFormatter()
+        
+        # Legacy compatibility - maintain parameters dict
+        self.parameters = self.parameter_manager.get_all_parameters()
+        
+        # Default parameters for backward compatibility
         self.default_parameters = {
             "temperature": 0.8,
             "max_tokens": 8192,
@@ -35,15 +45,21 @@ class ChatProvider(ABC):
             "repeat_penalty": 1.1,
             "use_markdown": True,
         }
+        
         self.tokenizer_manager = TokenizerManager()
         self._initialize_parameters()
 
     def _initialize_parameters(self):
-        """Ensure all default parameters are set in self.parameters."""
-        # Ensure all default parameters are set in self.parameters
+        """Ensure all default parameters are set in the parameter manager."""
+        # Register any provider-specific parameters
         for key, value in self.default_parameters.items():
-            if key not in self.parameters:
-                self.parameters[key] = value
+            if not self.parameter_manager.get_parameter_info(key):
+                # This is a custom parameter, ensure it exists
+                if key not in self.parameter_manager.parameters:
+                    self.parameter_manager.parameters[key] = value
+        
+        # Sync the legacy parameters dict
+        self.parameters = self.parameter_manager.get_all_parameters()
         self.save_parameters()
 
     def load_history(self) -> List[ChatMessage]:
@@ -116,56 +132,23 @@ class ChatProvider(ABC):
             return message
 
     def set_parameter(self, param: str, value: Any):
-        """Set a chat parameter."""
-        if isinstance(value, int) and param not in ["num_predict", "top_k", "repeat_last_n", "num_ctx", "candidate_count", "max_tokens"]:
-            value = str(value)
-        if param in self.default_parameters or param in ["repeat_penalty", "frequency_penalty"]:
-            if param in ["num_predict", "top_k", "repeat_last_n", "num_ctx", "candidate_count", "max_tokens"]:
-                value = int(value)
-            elif param in ["top_p", "temperature", "repeat_penalty", "frequency_penalty"]:
-                value = float(value)
-            elif param == "stop":
-                value = value.split() if isinstance(value, str) else value
-            elif param == "verbose":
-                value = str(value).lower() == "true"
-            
-            if param in ["repeat_penalty", "frequency_penalty"]:
-                self.parameters["repeat_penalty"] = value
-                self.parameters["frequency_penalty"] = value
-            else:
-                self.parameters[param] = value
-            
-            self.save_parameters()
-
-            if param == "use_markdown":
-                value = str(value).lower() == "true"
-                self.parameters['use_markdown'] = value
-                self.save_parameters()
-
-            if param != "verbose" or value:
-                console.print(f"Parameter '{param}' set to {value}", style="cyan")
-                if param == "max_tokens":
-                    console.print("(This will be sent as max_output_tokens to the API)", style="yellow")
-        else:
-            console.print(f"Invalid parameter: {param}", style="bold red")
+        """Set a chat parameter using the unified parameter manager."""
+        success = self.parameter_manager.set_parameter(param, value)
+        if success:
+            # Sync the legacy parameters dict for backward compatibility
+            self.parameters = self.parameter_manager.get_all_parameters()
 
     def save_parameters(self):
         """Save chat parameters to the database."""
-        self.history_manager.save_parameters(self.parameters)
+        # Parameters are automatically saved by the parameter manager
+        # This method is kept for backward compatibility
+        pass
 
     def show_parameters(self):
-        """Display current chat parameters."""
-        console.print("Current Parameters:", style="cyan")
-        for param, default_value in self.default_parameters.items():
-            current_value = self.parameters.get(param, default_value)
-            if param == "max_tokens":
-                console.print(f"max_tokens: {current_value} (sent as max_output_tokens to Gemini API)", style="green")
-            else:
-                console.print(f"{param}: {current_value}", style="green")
+        """Display current chat parameters using the unified parameter manager."""
+        self.parameter_manager.show_parameters()
         
-        if "frequency_penalty" not in self.default_parameters:
-            console.print(f"frequency_penalty: {self.parameters.get('frequency_penalty', self.parameters.get('repeat_penalty', 1.1))}", style="green")
-        
+        # Show system message if set
         if self.system_message:
             console.print(f"system: {self.system_message}", style="green")
 

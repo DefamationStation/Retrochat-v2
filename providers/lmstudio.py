@@ -6,6 +6,7 @@ import aiohttp
 from rich.console import Console
 
 from .base import ChatProvider
+from core.http_handler import HttpHandlerFactory, RequestConfig
 
 console = Console()
 
@@ -15,6 +16,10 @@ class LMStudioChatSession(ChatProvider):
         super().__init__(history_manager)
         self.base_url = base_url.rstrip('/')  # Remove trailing slash if present
         self.model = model
+        
+        # Initialize HTTP handler
+        self.http_handler = HttpHandlerFactory.create_handler('lmstudio')
+        
         self.default_parameters.update({
             "max_tokens": 8192,
             "temperature": 0.8,
@@ -48,26 +53,8 @@ class LMStudioChatSession(ChatProvider):
             return []
     
     def set_parameter(self, param: str, value: Any):
-        if param in self.default_parameters or param in ["repeat_penalty", "frequency_penalty"]:
-            if param in ["max_tokens"]:
-                value = int(value)
-            elif param in ["top_p", "temperature", "frequency_penalty", "presence_penalty", "repeat_penalty"]:
-                value = float(value)
-            elif param == "stop":
-                value = value.split() if isinstance(value, str) else value
-            elif param == "verbose":
-                value = str(value).lower() == "true"
-
-            # Only set and print if value actually changes
-            key = "frequency_penalty" if param in ["repeat_penalty", "frequency_penalty"] else param
-            old_value = self.parameters.get(key)
-            if old_value != value:
-                self.parameters[key] = value
-                self.history_manager.save_parameters(self.parameters)
-                if param != "verbose" or value:
-                    console.print(f"Parameter '{param}' set to {value}", style="cyan")
-        else:
-            console.print(f"Invalid parameter: {param}", style="bold red")
+        # Remove the custom set_parameter method to use the unified one from base class
+        super().set_parameter(param, value)
 
     async def send_message(self, message: str):
         self.add_to_history("user", message)
@@ -76,7 +63,8 @@ class LMStudioChatSession(ChatProvider):
         if self.system_message:
             messages.insert(0, {"role": "system", "content": self.system_message})
         
-        data = {
+        # Prepare request data
+        json_data = {
             "model": self.model,
             "messages": messages,
             "stream": True,
@@ -89,45 +77,39 @@ class LMStudioChatSession(ChatProvider):
 
         # Add stop parameter if it's set
         if self.parameters.get("stop"):
-            data["stop"] = self.parameters["stop"]
+            json_data["stop"] = self.parameters["stop"]
 
-        headers = {
-            "Content-Type": "application/json",
-        }
-
-        url = f"{self.base_url}/v1/chat/completions"
+        # Create request configuration
+        config = RequestConfig(
+            url=f"{self.base_url}/v1/chat/completions",
+            headers={"Content-Type": "application/json"},
+            json_data=json_data,
+            stream=True
+        )
         
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=data, headers=headers) as response:
-                if response.status == 200:
-                    complete_message = ""
-                    async for line in response.content:
-                        if line:
-                            line = line.decode('utf-8').strip()
-                            if line.startswith("data: "):
-                                if line == "data: [DONE]":
-                                    break
-                                json_str = line[6:]
-                                try:
-                                    response_json = json.loads(json_str)
-                                    content = response_json['choices'][0]['delta'].get('content', '')
-                                    if content:
-                                        complete_message += content
-                                        yield content  # Always yield the content
-                                except json.JSONDecodeError:
-                                    continue
-                    
-                    formatted_message = self.format_message(complete_message)
-                    self.add_to_history("assistant", formatted_message)
-                    
-                    if self.parameters.get("verbose", False):
-                        tokens = self.calculate_tokens(formatted_message)
-                        total_tokens = self.calculate_total_tokens()
-                        console.print(f"\nResponse tokens: {tokens}", style="cyan")
-                        console.print(f"Total conversation tokens: {total_tokens}", style="cyan")
-                    
-                    yield None  # Signal end of streaming
+        # Use unified HTTP handler
+        complete_message = ""
+        async for chunk in self.http_handler.send_request(config):
+            if chunk is None:
+                # End of streaming
+                break
+            elif isinstance(chunk, str):
+                if chunk.startswith("Error:"):
+                    # This is an error message
+                    yield chunk
+                    return
                 else:
-                    error_message = f"Error: {response.status} - {await response.text()}"
-                    console.print(error_message, style="bold red")
-                    yield error_message
+                    # This is content
+                    complete_message += chunk
+                    yield chunk
+        
+        # Process complete message
+        if complete_message:
+            formatted_message = self.format_message(complete_message)
+            self.add_to_history("assistant", formatted_message)
+            
+            if self.parameters.get("verbose", False):
+                tokens = self.calculate_tokens(formatted_message)
+                total_tokens = self.calculate_total_tokens()
+                console.print(f"\nResponse tokens: {tokens}", style="cyan")
+                console.print(f"Total conversation tokens: {total_tokens}", style="cyan")
