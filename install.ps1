@@ -177,44 +177,67 @@ function Initialize-PythonEnvironment {
         Write-Host "[*] This may take several minutes and may appear frozen - please wait..." -ForegroundColor Gray
         Write-Host "[*] Installing pip updates..." -ForegroundColor Cyan
         
-        # Upgrade pip with progress indication
-        $pipUpgrade = Start-Process -FilePath $PYTHON_EXE -ArgumentList "-m", "pip", "install", "--upgrade", "pip", "--quiet" -NoNewWindow -PassThru
-        
-        # Show progress dots while pip upgrade is running
-        while (-not $pipUpgrade.HasExited) {
-            Write-Host "." -NoNewline -ForegroundColor Gray
-            Start-Sleep -Seconds 2
-        }
-        Write-Host ""
-        
-        if ($pipUpgrade.ExitCode -eq 0) {
-            Write-Host "[OK] Pip updated successfully" -ForegroundColor Green
+        # Upgrade pip with better error handling
+        try {
+            $pipUpgrade = Start-Process -FilePath $PYTHON_EXE -ArgumentList "-m", "pip", "install", "--upgrade", "pip", "--quiet" -NoNewWindow -PassThru -Wait
+            
+            if ($pipUpgrade.ExitCode -eq 0) {
+                Write-Host "[OK] Pip updated successfully" -ForegroundColor Green
+            } else {
+                Write-Host "[WARNING] Pip upgrade had issues, continuing anyway..." -ForegroundColor Yellow
+            }
+        } catch {
+            Write-Host "[WARNING] Pip upgrade failed, continuing with existing version..." -ForegroundColor Yellow
         }
         
         Write-Host "[*] Installing packages from requirements.txt..." -ForegroundColor Cyan
         Write-Host "[*] This step takes the longest - installing AI and document processing libraries..." -ForegroundColor Gray
         
-        # Install requirements with progress indication
-        $reqInstall = Start-Process -FilePath $PYTHON_EXE -ArgumentList "-m", "pip", "install", "-r", $requirementsPath, "--quiet" -NoNewWindow -PassThru
-        
-        # Show progress with estimated time
-        $progressCount = 0
-        $packages = @("anthropic", "chromadb", "langchain", "rich", "requests", "and other dependencies")
-        
-        while (-not $reqInstall.HasExited) {
-            $currentPackage = $packages[$progressCount % $packages.Length]
-            Write-Host "`r[*] Installing $currentPackage..." -NoNewline -ForegroundColor Cyan
-            Start-Sleep -Seconds 3
-            $progressCount++
+        # First try with --quiet flag
+        try {
+            $reqInstall = Start-Process -FilePath $PYTHON_EXE -ArgumentList "-m", "pip", "install", "-r", $requirementsPath, "--quiet" -NoNewWindow -PassThru
+            
+            # Show progress with package names
+            $progressCount = 0
+            $packages = @("anthropic", "chromadb", "langchain", "rich", "requests", "other packages")
+            
+            while (-not $reqInstall.HasExited) {
+                $currentPackage = $packages[$progressCount % $packages.Length]
+                Write-Host "[*] Installing $currentPackage" -ForegroundColor Cyan
+                Start-Sleep -Seconds 3
+                $progressCount++
+            }
+            
+            $reqInstall.WaitForExit()
+            
+            if ($reqInstall.ExitCode -eq 0) {
+                Write-Host "[OK] Python packages installed successfully" -ForegroundColor Green
+            } else {
+                throw "Pip installation failed with exit code $($reqInstall.ExitCode)"
+            }
+            
+        } catch {
+            Write-Host "[WARNING] Quiet installation failed, trying with verbose output..." -ForegroundColor Yellow
+            Write-Host "[*] Installing packages (with output)..." -ForegroundColor Cyan
+            
+            # Try again without --quiet to see actual error
+            & $PYTHON_EXE -m pip install -r $requirementsPath
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "[ERROR] Package installation failed." -ForegroundColor Red
+                Write-Host "[INFO] This could be due to:" -ForegroundColor Yellow
+                Write-Host "  - Poor internet connection" -ForegroundColor Yellow
+                Write-Host "  - Corporate firewall blocking downloads" -ForegroundColor Yellow
+                Write-Host "  - Python/pip configuration issues" -ForegroundColor Yellow
+                Write-Host "[INFO] Try running the installer again, or install manually with:" -ForegroundColor Blue
+                Write-Host "  cd $SOURCE_DIR" -ForegroundColor Blue
+                Write-Host "  venv\Scripts\python -m pip install -r requirements.txt" -ForegroundColor Blue
+                exit 1
+            } else {
+                Write-Host "[OK] Packages installed successfully on retry" -ForegroundColor Green
+            }
         }
-        Write-Host ""
-        
-        if ($reqInstall.ExitCode -eq 0) {
-            Write-Host "[OK] Python packages installed successfully" -ForegroundColor Green
-        } else {
-            Write-Host "[ERROR] Failed to install Python packages" -ForegroundColor Red
-            exit 1
-        }
+    } else {
+        Write-Host "[WARNING] requirements.txt not found, skipping package installation" -ForegroundColor Yellow
     }
 }
 
