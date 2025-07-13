@@ -232,16 +232,39 @@ class ChatApp:
         try:
             response_chunks = []
             async for chunk in self.current_session.send_message(user_input):
-                if chunk is not None:
+                if chunk is not None and isinstance(chunk, str):
                     response_chunks.append(chunk)
+                            
             complete_response = "".join(response_chunks)
+                
         except Exception as e:
             console.print(f"An error occurred while processing the response: {str(e)}", style="bold red")
             return
         
         if use_markdown:
-            # Let the display manager handle the response, including think tags
-            self.display_manager.display_chat_history()
+            # Handle both think tags and code blocks in a unified way using the complete response
+            content = complete_response
+            
+            # Process think tags first
+            import re
+            think_match = re.search(r"<think>(.*?)</think>", content, re.DOTALL)
+            if think_match:
+                thought = think_match.group(1)
+                self.display_manager.display_streaming_thoughts_complete(thought)
+                # Remove think tags from content for further processing
+                content = content.replace(think_match.group(0), "").strip()
+            
+            # Then process code blocks and display the rest
+            if content:
+                formatted_content, new_code_blocks = self.code_block_formatter.format_code_blocks(content)
+                self.code_blocks.extend(new_code_blocks)
+                for line in formatted_content:
+                    if isinstance(line, Panel):
+                        console.print(line)
+                    elif isinstance(line, str):
+                        console.print(Markdown(line), style="yellow")
+                    else:
+                        console.print(str(line), style="yellow")
         else:
             console.print("")  # Add an empty print to create a new line after streaming
 

@@ -16,6 +16,18 @@ class DisplayManager:
         self.show_thoughts = not self.show_thoughts
         console.print(f"Model thoughts display toggled {'on' if self.show_thoughts else 'off'}.", style="bold yellow")
 
+    def display_streaming_thoughts_complete(self, thought: str):
+        """Display the completed thought after streaming, replacing the loading panel."""
+        if self.show_thoughts and thought:
+            panel_content = Text(thought.strip(), style="bright_black")
+            panel = Panel(
+                Padding(panel_content, (1, 2)),
+                title="[dim]💭 Model thoughts[/dim]",
+                border_style="bright_black",
+                expand=False
+            )
+            console.print(panel)
+
     def display_think_thought(self, thought: str):
         """Display the thought process in a panel, respecting the collapsed state."""
         if self.show_thoughts and thought:
