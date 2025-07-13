@@ -301,21 +301,20 @@ try {
     # Download source code
     $success = $false
     
-    # Try ZIP download first (faster, no dependencies)
-    $success = Install-FromZip
-    
-    # Fallback to Git if ZIP failed
-    if (-not $success) {
-        Write-Host "[*] Trying Git clone method..." -ForegroundColor Yellow
-        
-        if (Test-Command "git") {
+    # Try Git clone first (preferred for future updates)
+    if (Test-Command "git") {
+        $success = Install-FromGit
+    } else {
+        # Offer to install Git for better update experience
+        if (Install-Git) {
             $success = Install-FromGit
-        } else {
-            # Offer to install Git
-            if (Install-Git) {
-                $success = Install-FromGit
-            }
         }
+    }
+    
+    # Fallback to ZIP if Git failed
+    if (-not $success) {
+        Write-Host "[*] Falling back to ZIP download..." -ForegroundColor Yellow
+        $success = Install-FromZip
     }
     
     if (-not $success) {

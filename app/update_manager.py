@@ -108,8 +108,14 @@ class UpdateManager:
                     # Current commit not in recent history, assume updates available
                     available_updates = remote_commits[:5]
             else:
-                # No current commit info, show recent commits
-                available_updates = remote_commits[:5]
+                # No git repo - check if this is a fresh install
+                # If installed via ZIP, we likely have the latest version
+                if self.is_installed:
+                    console.print("[OK] RetroChat is up to date! (installed from latest source)", style="green")
+                    return False
+                else:
+                    # Development/manual clone without git - show recent commits
+                    available_updates = remote_commits[:3]  # Show fewer since it's probably recent
 
             if not available_updates:
                 console.print("[OK] RetroChat is up to date!", style="green")
@@ -154,9 +160,12 @@ class UpdateManager:
         try:
             console.print("[*] Updating RetroChat...", style="cyan")
             
+            # Always prefer git if available
             if self._has_git() and self._is_git_repo():
+                console.print("[*] Using Git for fast update...", style="dim")
                 return await self._update_with_git()
             else:
+                console.print("[*] Using ZIP download method...", style="dim")
                 return await self._update_with_zip()
 
         except Exception as e:
@@ -166,12 +175,30 @@ class UpdateManager:
     async def _update_with_git(self) -> bool:
         """Update using git pull."""
         try:
-            console.print("[*] Updating via Git...", style="yellow")
+            console.print("[*] Fetching latest changes...", style="yellow")
             
             # Get current commit before update
             old_commit = self.get_current_commit() or "unknown"
 
+            # Fetch first to check for changes
+            result = subprocess.run(['git', 'fetch'], cwd=self.current_dir, 
+                                  capture_output=True, text=True)
+            if result.returncode != 0:
+                console.print(f"Git fetch failed: {result.stderr}", style="yellow")
+                console.print("Falling back to ZIP download...", style="yellow")
+                return await self._update_with_zip()
+
+            # Check if there are actually new commits
+            result = subprocess.run(['git', 'rev-list', 'HEAD..origin/main', '--count'], 
+                                  cwd=self.current_dir, capture_output=True, text=True)
+            if result.returncode == 0:
+                commit_count = int(result.stdout.strip())
+                if commit_count == 0:
+                    console.print("[OK] Already up to date via Git!", style="green")
+                    return True
+
             # Pull latest changes
+            console.print("[*] Pulling latest changes...", style="yellow")
             result = subprocess.run(['git', 'pull'], cwd=self.current_dir, 
                                   capture_output=True, text=True)
             if result.returncode != 0:
@@ -288,8 +315,12 @@ Write-Host "You can now run 'rchat' again." -ForegroundColor Cyan
         requirements_file = os.path.join(self.current_dir, "requirements.txt")
         
         if os.path.exists(venv_python) and os.path.exists(requirements_file):
-            subprocess.run([venv_python, "-m", "pip", "install", "-r", requirements_file, "--quiet"],
+            result = subprocess.run([venv_python, "-m", "pip", "install", "-r", requirements_file, "--quiet"],
                          cwd=self.current_dir)
+            if result.returncode == 0:
+                console.print("[OK] Python packages updated", style="green")
+            else:
+                console.print("[WARNING] Some packages may not have updated properly", style="yellow")
 
         # Save update information
         EnvManager.set_env_variable("LAST_COMMIT_HASH", new_commit)
