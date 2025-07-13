@@ -12,14 +12,14 @@ class SetupManager:
 
     def check_and_setup(self):
         rchat_bat_path = os.path.join(Config.RETROCHAT_DIR, "rchat.bat")
-        if not os.path.exists(rchat_bat_path) or not os.path.exists(Config.RETROCHAT_SCRIPT):
+        if not os.path.exists(rchat_bat_path):
             console.print("RetroChat Setup", style="bold cyan")
             console.print("This setup will do the following:", style="cyan")
             console.print("1. Create a '.retrochat' folder in your home directory", style="cyan")
-            console.print("2. Copy the RetroChat script to the '.retrochat' folder", style="cyan")
-            console.print("3. Create an 'rchat.bat' file in the '.retrochat' folder", style="cyan")
-            console.print("4. Add the '.retrochat' folder to your system PATH", style="cyan")
+            console.print("2. Create launcher scripts (rchat.bat and rchat.ps1) in the '.retrochat' folder", style="cyan")
+            console.print("3. Add the '.retrochat' folder to your system PATH", style="cyan")
             console.print("\nThis will allow you to run RetroChat from anywhere using the 'rchat' command.", style="cyan")
+            console.print("The scripts will run from your project directory, ensuring you always get the latest updates.", style="cyan")
             
             response = console.ask("Do you want to proceed with the setup?", choices=["yes", "no"])
             if response.lower() == "yes":
@@ -30,22 +30,35 @@ class SetupManager:
     def setup_rchat(self):
         os.makedirs(Config.RETROCHAT_DIR, exist_ok=True)
         
+        # Get the current script's directory (the project directory)
         current_script = sys.argv[0]
-        shutil.copy2(current_script, Config.RETROCHAT_SCRIPT)
-        console.print(f"Copied RetroChat script to {Config.RETROCHAT_SCRIPT}", style="cyan")
-
-        # Also copy rchat.ps1 to the .retrochat directory
-        rchat_ps1_src = os.path.join(os.path.dirname(current_script), "rchat.ps1")
+        project_dir = os.path.dirname(os.path.abspath(current_script))
+        
+        # Copy rchat.ps1 to the .retrochat directory with the correct project path
+        rchat_ps1_src = os.path.join(project_dir, "rchat.ps1")
         rchat_ps1_dst = os.path.join(Config.RETROCHAT_DIR, "rchat.ps1")
+        
         if os.path.exists(rchat_ps1_src):
-            shutil.copy2(rchat_ps1_src, rchat_ps1_dst)
-            console.print(f"Copied rchat.ps1 to {rchat_ps1_dst}", style="cyan")
+            # Read the PowerShell script and update the project directory path
+            with open(rchat_ps1_src, 'r') as f:
+                ps1_content = f.read()
+            
+            # Replace the placeholder with the actual project directory
+            ps1_content = ps1_content.replace(
+                '{{PROJECT_DIR_PLACEHOLDER}}',
+                project_dir.replace('\\', '\\\\')  # Escape backslashes for PowerShell
+            )
+            
+            # Write the updated script
+            with open(rchat_ps1_dst, 'w') as f:
+                f.write(ps1_content)
+            console.print(f"Created rchat.ps1 at {rchat_ps1_dst} (pointing to {project_dir})", style="cyan")
         else:
             console.print(f"Warning: rchat.ps1 not found at {rchat_ps1_src}. Batch launcher may not work.", style="yellow")
         
         if sys.platform.startswith('win'):
             rchat_bat_path = os.path.join(Config.RETROCHAT_DIR, "rchat.bat")
-            rchat_ps1_path = os.path.join(os.path.dirname(Config.RETROCHAT_SCRIPT), "rchat.ps1")
+            rchat_ps1_path = os.path.join(Config.RETROCHAT_DIR, "rchat.ps1")
             # The batch file will call the PowerShell script, passing all arguments
             with open(rchat_bat_path, "w") as f:
                 f.write(f"@echo off\n"
@@ -54,9 +67,9 @@ class SetupManager:
         else:  # Mac or Linux
             rchat_sh_path = os.path.join(Config.RETROCHAT_DIR, "rchat")
             with open(rchat_sh_path, "w") as f:
-                f.write(f'#!/bin/bash\npython3 "{Config.RETROCHAT_SCRIPT}" "$@"')
+                f.write(f'#!/bin/bash\ncd "{project_dir}"\npython3 "retrochat.py" "$@"')
             os.chmod(rchat_sh_path, 0o755)  # Make the script executable
-            console.print(f"Created rchat shell script at {rchat_sh_path}", style="cyan")
+            console.print(f"Created rchat shell script at {rchat_sh_path} (pointing to {project_dir})", style="cyan")
         
         if not os.path.exists(Config.ENV_FILE):
             with open(Config.ENV_FILE, "w") as f:
@@ -72,6 +85,7 @@ class SetupManager:
             console.print(f"Created .env file at {Config.ENV_FILE}", style="cyan")
         
         console.print("Setup complete. You can now use the 'rchat' command from anywhere.", style="green")
+        console.print("The launcher will always run from your project directory, so updates will be automatic!", style="green")
         
         if sys.platform.startswith('win'):
             import winreg
@@ -99,5 +113,3 @@ class SetupManager:
             
             console.print(f"Added {Config.RETROCHAT_DIR} to PATH in {rc_path}", style="cyan")
             console.print(f"Please run 'source ~/{rc_file}' or restart your terminal for the changes to take effect.", style="cyan")
-
-        console.print("Setup complete. You can now use the 'rchat' command from anywhere.", style="green")

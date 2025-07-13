@@ -18,7 +18,6 @@ class Config:
     ENV_FILE = os.path.join(RETROCHAT_DIR, '.env')
     DB_FILE = os.path.join(RETROCHAT_DIR, 'chat_history.db')
     SETTINGS_FILE = os.path.join(RETROCHAT_DIR, 'settings.json')
-    RETROCHAT_SCRIPT = os.path.join(RETROCHAT_DIR, 'retrochat.py')
     CHROMA_PATH = os.path.join(RETROCHAT_DIR, "chroma")
     
     # API Key environment variable names

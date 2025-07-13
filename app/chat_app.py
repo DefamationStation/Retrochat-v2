@@ -67,7 +67,8 @@ class ChatApp:
         ]
         
         if not os.path.exists(Config.ENV_FILE):
-            self.setup_manager.setup_rchat()
+            # Only run setup if .env file doesn't exist
+            # The setup manager will handle creating the launcher scripts
             return
 
         with open(Config.ENV_FILE, 'r') as f:
