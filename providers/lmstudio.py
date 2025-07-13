@@ -1,7 +1,7 @@
 """LM Studio chat provider implementation."""
 
 import json
-from typing import Any
+from typing import Any, List, Optional
 import aiohttp
 from rich.console import Console
 
@@ -23,6 +23,29 @@ class LMStudioChatSession(ChatProvider):
             "presence_penalty": 0.0,
             "stop": None,
         })
+    
+    @classmethod
+    async def get_available_models(cls, base_url: str) -> List[str]:
+        """Fetch available models from LM Studio's /v1/models endpoint."""
+        base_url = base_url.rstrip('/')
+        url = f"{base_url}/v1/models"
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        models_data = await response.json()
+                        if 'data' in models_data:
+                            return [model['id'] for model in models_data['data']]
+                        else:
+                            console.print("Unexpected API response structure from LM Studio", style="bold red")
+                            return []
+                    else:
+                        console.print(f"Error fetching LM Studio models: {response.status} - {await response.text()}", style="bold red")
+                        return []
+        except Exception as e:
+            console.print(f"Error connecting to LM Studio: {e}", style="bold red")
+            return []
     
     def set_parameter(self, param: str, value: Any):
         if param in self.default_parameters or param in ["repeat_penalty", "frequency_penalty"]:
