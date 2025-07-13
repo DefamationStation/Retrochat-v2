@@ -494,18 +494,21 @@ function Initialize-PythonEnvironment {
         try {
             $reqInstall = Start-Process -FilePath $PYTHON_EXE -ArgumentList "-m", "pip", "install", "-r", $requirementsPath, "--quiet" -NoNewWindow -PassThru
             
-            # Show progress with package names
+            # Show progress without cycling package names
             $progressCount = 0
-            $packages = @("anthropic", "chromadb", "langchain", "rich", "requests", "other packages")
+            Write-Host "[*] Installing Python packages (this may take several minutes)..." -ForegroundColor Cyan
             
             while (-not $reqInstall.HasExited) {
-                $currentPackage = $packages[$progressCount % $packages.Length]
-                Write-Host "[*] Installing $currentPackage" -ForegroundColor Cyan
-                Start-Sleep -Seconds 3
                 $progressCount++
+                $dots = "." * ($progressCount % 4)
+                Write-Host "`r[*] Installing Python packages$dots   " -NoNewline -ForegroundColor Cyan
+                Start-Sleep -Seconds 2
             }
             
             $reqInstall.WaitForExit()
+            
+            # Clear the progress line and move to next line
+            Write-Host "`r" + (" " * 50) + "`r" -NoNewline
             
             if ($reqInstall.ExitCode -eq 0) {
                 Write-Host "[OK] Python packages installed successfully" -ForegroundColor Green
