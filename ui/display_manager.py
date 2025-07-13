@@ -27,6 +27,9 @@ class DisplayManager:
                 expand=False
             )
             console.print(panel)
+        elif thought:
+            # Show a collapsed message
+            console.print(Panel("[dim]Model thoughts...[/dim]", border_style="bright_black", expand=False))
 
     def display_think_thought(self, thought: str):
         """Display the thought process in a panel, respecting the collapsed state."""
