@@ -9,10 +9,16 @@ from utils.console import console
 class DisplayManager:
     def __init__(self, chat_app):
         self.chat_app = chat_app
+        self.show_thoughts = False  # Collapsed by default
+
+    def toggle_thoughts_display(self):
+        """Toggle the visibility of model thoughts."""
+        self.show_thoughts = not self.show_thoughts
+        console.print(f"Model thoughts display toggled {'on' if self.show_thoughts else 'off'}.", style="bold yellow")
 
     def display_think_thought(self, thought: str):
-        """Display the thought process in a panel."""
-        if thought:
+        """Display the thought process in a panel, respecting the collapsed state."""
+        if self.show_thoughts and thought:
             panel_content = Text(thought.strip(), style="bright_black")
             panel = Panel(
                 Padding(panel_content, (1, 2)),
@@ -21,6 +27,9 @@ class DisplayManager:
                 expand=False
             )
             console.print(panel)
+        elif thought:
+            # Show a collapsed message
+            console.print(Panel("[dim]Model thoughts...[/dim]", border_style="bright_black", expand=False))
 
     def display_chat_history(self):
         if self.chat_app.current_session and self.chat_app.current_session.chat_history:

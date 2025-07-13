@@ -240,16 +240,8 @@ class ChatApp:
             return
         
         if use_markdown:
-            # Format and display the complete response
-            formatted_response, new_code_blocks = self.code_block_formatter.format_code_blocks(complete_response)
-            self.code_blocks.extend(new_code_blocks)
-            for line in formatted_response:
-                if isinstance(line, Panel):
-                    console.print(line)
-                elif isinstance(line, str):
-                    console.print(Markdown(line), style="yellow")
-                else:
-                    console.print(str(line), style="yellow")
+            # Let the display manager handle the response, including think tags
+            self.display_manager.display_chat_history()
         else:
             console.print("")  # Add an empty print to create a new line after streaming
 

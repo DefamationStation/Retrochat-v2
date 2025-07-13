@@ -64,10 +64,14 @@ class CommandHandler:
             await self.handle_show_length(session)
         elif cmd == '/show' and args[0] == 'context':
             await self.chat_app.handle_show_context()
+        elif cmd == '/show' and args[0] == 'thinking':
+            self.handle_show_thinking(args[1])
         elif cmd == '/switch':
             return await self.handle_switch(args[0], session)
         elif cmd == '/help':
             self.display_help()
+        elif cmd == '/thoughts':
+            self.chat_app.display_manager.toggle_thoughts_display()
         else:
             console.print("Unknown command. Type /help for available commands.", style="bold red")
 
@@ -88,6 +92,16 @@ class CommandHandler:
                 console.print(f"Model '{model_name}' not found in OpenRouter models.", style="yellow")
         else:
             console.print("Invalid OpenRouter command. Use '/openrouter add <model_name>' or '/openrouter rm <model_name>'.", style="bold red")
+
+    def handle_show_thinking(self, value: str):
+        """Handle the /show thinking command."""
+        if value.lower() in ['true', 'false']:
+            show_thoughts = value.lower() == 'true'
+            self.chat_app.display_manager.show_thoughts = show_thoughts
+            status = "enabled" if show_thoughts else "disabled"
+            console.print(f"Model thoughts display {status}.", style="cyan")
+        else:
+            console.print("Invalid value. Use '/show thinking true' or '/show thinking false'.", style="bold red")
 
     def handle_set(self, param: str, value: str, session: ChatProvider):
         """Handle parameter setting commands."""
