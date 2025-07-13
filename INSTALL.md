@@ -1,61 +1,72 @@
-# RetroChat v2 - One-Command Installation
+# RetroChat v2 - Installation
 
-## Quick Install
+## Quick Install (One Command)
 
-Run this single command to install RetroChat v2:
-
+**Windows:**
 ```powershell
 powershell -ExecutionPolicy Bypass -Command "iwr -useb https://raw.githubusercontent.com/DefamationStation/Retrochat-v2/main/install.ps1 | iex"
 ```
 
-That's it! This command will:
+**Linux/macOS:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/DefamationStation/Retrochat-v2/main/install.ps1 | pwsh -
+```
 
-- 📦 Download the latest RetroChat to `~/.retrochat/`
-- 🐍 Create a Python virtual environment
-- 📋 Install all required dependencies
+That's it! This will:
+- 📦 Download RetroChat to `~/.retrochat/`
+- 🐍 Create a Python virtual environment  
+- 📋 Install all dependencies
 - 🔧 Set up the global `rchat` command
 - ✅ Add to your system PATH
 
+## Interactive Install
+
+For more options, download and run the installer:
+
+```bash
+# Download
+curl -o install.ps1 https://raw.githubusercontent.com/DefamationStation/Retrochat-v2/main/install.ps1
+
+# Run with menu
+pwsh ./install.ps1 -Interactive
+```
+
+**Menu Options:**
+- Quick install (default)
+- Custom installation path
+- Force reinstall
+- Install development branch
+- Show system requirements
+
 ## Usage
 
-After installation, simply run:
-
+After installation:
 ```bash
 rchat
 ```
 
-From anywhere on your system!
-
 ## Auto-Updates
 
-RetroChat automatically checks for updates every time you start it. You'll see:
+RetroChat checks for updates on startup and shows:
+- 📋 Recent commits with descriptions
+- 🕒 Timestamps and authors  
+- ❓ Update prompt (yes/no)
 
-- 📋 List of recent commits/changes
-- 🕒 Timestamps and authors
-- ❓ Option to update or skip
+## System Requirements
 
-Updates are seamless and maintain your settings.
-
-## Features
-
-- **Zero Dependencies**: Installer handles everything
-- **Self-Contained**: Everything lives in `~/.retrochat/`
-- **Auto-Updates**: Always get the latest features
-- **Smart Fallbacks**: Works with or without Git
-- **Clean Installation**: No system pollution
+- **Python 3.8+** (required)
+- **Git** (optional, enables faster updates)
+- **PowerShell** (Linux/macOS: install `powershell`)
 
 ## Troubleshooting
 
-If `rchat` command isn't found after installation:
-1. Restart your terminal/command prompt
-2. Or run the full path: `~/.retrochat/rchat.bat`
+**Command not found after install:**
+1. Restart your terminal
+2. Or run: `~/.retrochat/rchat` (Linux/macOS) or `%USERPROFILE%\.retrochat\rchat.bat` (Windows)
 
-## Manual Installation
-
-If you prefer manual setup:
-1. Clone this repository
-2. Run `python retrochat.py` from the project directory
-
----
-
-*RetroChat v2 - Modern AI chat with automatic updates*
+**Manual installation:**
+```bash
+git clone https://github.com/DefamationStation/Retrochat-v2.git
+cd Retrochat-v2
+python retrochat.py
+```
