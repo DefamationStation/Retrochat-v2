@@ -20,7 +20,7 @@ $requirementsPath = Join-Path $projectDir "requirements.txt"
 Set-Location $projectDir
 
 # Function to create virtual environment and install requirements
-function Setup-Environment {
+function Initialize-Environment {
     Write-Host "Setting up Retrochat environment..." -ForegroundColor Yellow
     
     # Check if Python is available
@@ -67,12 +67,12 @@ if (Test-Path $pythonExe) {
         & $pythonExe $scriptPath @args
     } else {
         Write-Host "Virtual environment exists but dependencies are missing." -ForegroundColor Yellow
-        Setup-Environment
+        Initialize-Environment
         & $pythonExe $scriptPath @args
     }
 } else {
     # No venv found, set it up
     Write-Host "No virtual environment found. Setting up for first time..." -ForegroundColor Yellow
-    Setup-Environment
+    Initialize-Environment
     & $pythonExe $scriptPath @args
 }
